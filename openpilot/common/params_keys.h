@@ -7,6 +7,7 @@
 
 inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"AccessToken", {CLEAR_ON_MANAGER_START | DONT_LOG, STRING}},
+    {"Recording", {CLEAR_ON_MANAGER_START, BOOL}},  // recorder fork: UI toggles this; gates loggerd/encoderd. resets off each boot
     {"AdbEnabled", {PERSISTENT, BOOL}},
     {"AlwaysOnDM", {PERSISTENT, BOOL}},
     {"ApiCache_Device", {PERSISTENT, STRING}},

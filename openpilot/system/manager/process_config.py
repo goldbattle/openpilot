@@ -61,6 +61,10 @@ def only_offroad(started: bool, params: Params, CP: car.CarParams) -> bool:
 def livestream(started: bool, params: Params, CP: car.CarParams) -> bool:
   return params.get_bool("IsLiveStreaming")
 
+def recording(started: bool, params: Params, CP: car.CarParams) -> bool:
+  # data-recorder fork: record path runs on the Recording param, independent of a car/ignition
+  return params.get_bool("Recording")
+
 def or_(*fns):
   return lambda *args: operator.or_(*(fn(*args) for fn in fns))
 
@@ -71,14 +75,17 @@ def not_(*fns):
   return lambda *args: operator.not_(*(fn(*args) for fn in fns))
 
 procs = [
-  DaemonProcess("manage_athenad", "openpilot.system.athena.manage_athenad", "AthenadPid"),
+  # recorder fork: never phone home to comma (no athena tunnel, no uploads)
+  DaemonProcess("manage_athenad", "openpilot.system.athena.manage_athenad", "AthenadPid", enabled=False),
 
-  NativeProcess("loggerd", "openpilot/system/loggerd", ["./loggerd"], logging),
-  NativeProcess("encoderd", "openpilot/system/loggerd", ["./encoderd"], only_onroad),
+  NativeProcess("loggerd", "openpilot/system/loggerd", ["./loggerd"], or_(logging, recording)),
+  NativeProcess("encoderd", "openpilot/system/loggerd", ["./encoderd"], or_(only_onroad, recording)),
   NativeProcess("stream_encoderd", "openpilot/system/loggerd", ["./encoderd", "--stream"], or_(and_(livestream, not_(iscar)), notcar)),
   PythonProcess("logmessaged", "openpilot.system.logmessaged", always_run),
 
-  NativeProcess("camerad", "openpilot/system/camerad", ["./camerad"], or_(driverview, livestream), enabled=not WEBCAM),
+  # recorder fork: camerad always on so the 3-camera preview is available before/while recording
+  # ponytail: always-on camera raises idle power/heat; gate on a preview state if that matters
+  NativeProcess("camerad", "openpilot/system/camerad", ["./camerad"], always_run, enabled=not WEBCAM),
   PythonProcess("webcamerad", "openpilot.system.camerad.webcam.camerad", driverview, enabled=WEBCAM),
   PythonProcess("proclogd", "openpilot.system.proclogd", only_onroad, enabled=platform.system() != "Darwin"),
   PythonProcess("journald", "openpilot.system.journald", only_onroad, platform.system() != "Darwin"),
@@ -115,7 +122,8 @@ procs = [
   PythonProcess("modem", "openpilot.common.hardware.tici.modem", always_run, enabled=TICI),
   PythonProcess("tombstoned", "openpilot.system.tombstoned", always_run, enabled=not PC),
   PythonProcess("updated", "openpilot.system.updated.updated", only_offroad, enabled=not PC),
-  PythonProcess("uploader", "openpilot.system.loggerd.uploader", always_run),
+  # recorder fork: disabled — data stays on device, never uploaded to comma
+  PythonProcess("uploader", "openpilot.system.loggerd.uploader", always_run, enabled=False),
   PythonProcess("feedbackd", "openpilot.selfdrive.ui.feedback.feedbackd", only_onroad),
 
   # debug procs
