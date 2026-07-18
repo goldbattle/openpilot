@@ -129,9 +129,12 @@ class MiciMainLayout(Scroller):
       if not ui_state.sm["carState"].standstill:
         gui_app.pop_widgets_to(self, lambda: self._scroll_to(self._onroad_layout))
     else:
-      # Screen turns off on timeout offroad, so pop immediately without animation
+      # recorder fork: don't touch the scroll position here. Upstream scrolls to
+      # _home_layout on timeout, but _home_layout is _recorder_pages[0] -- which in this
+      # fork is the far-left SettingsPage, not a home screen. So every screen-off silently
+      # rewound the camera pages to the far left, and waking landed on settings.
+      # Leave the user wherever they were; nothing needs resetting when there's no drive.
       gui_app.pop_widgets_to(self, instant=True)
-      self._scroll_to(self._home_layout)
 
   def _on_bookmark_clicked(self):
     user_bookmark = messaging.new_message('bookmarkButton')

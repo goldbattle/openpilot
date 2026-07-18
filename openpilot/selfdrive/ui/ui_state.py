@@ -82,6 +82,10 @@ class UIState:
     self.usbgpu_compiled: bool = self.params.get_bool("UsbGpuCompiled")
     self.started: bool = False
     self.ignition: bool = False
+    # recorder fork: keeps the screen awake while recording (see Device._update_wakefulness).
+    # Read on the existing 5Hz params thread rather than importing recorder.py's cached
+    # getter -- that module imports ui_state, so the reverse import would be circular.
+    self.recording: bool = False
     self.recording_audio: bool = False
     self.panda_type: log.PandaState.PandaType = log.PandaState.PandaType.unknown
     self.personality: log.LongitudinalPersonality = log.LongitudinalPersonality.standard
@@ -202,6 +206,7 @@ class UIState:
       else:
         self.has_longitudinal_control = self.CP.openpilotLongitudinalControl
 
+    self.recording = self.params.get_bool("Recording")
     self.recording_audio = self.params.get_bool("RecordAudio") and self.started
     self.is_metric = self.params.get_bool("IsMetric")
     self.always_on_dm = self.params.get_bool("AlwaysOnDM")
@@ -313,7 +318,9 @@ class Device:
         callback()
     self._prev_timed_out = interaction_timeout
 
-    self._set_awake(ui_state.ignition or not interaction_timeout or PC)
+    # recorder fork: never blank the screen mid-recording -- the user is watching the
+    # camera feed, and a dark screen is indistinguishable from "recording stopped".
+    self._set_awake(ui_state.ignition or ui_state.recording or not interaction_timeout or PC)
 
   def _set_awake(self, on: bool):
     if on != self._awake:
