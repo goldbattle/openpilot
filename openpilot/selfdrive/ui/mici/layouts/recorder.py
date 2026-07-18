@@ -271,17 +271,8 @@ def make_recorder_pages() -> list[Widget]:
   # otherwise segments only contain fcamera (road) + ecamera (wide).
   params.put_bool("RecordFront", True)
   # note: DM procs are always_run in process_config (not gated on IsDriverViewEnabled, which
-  # is CLEAR_ON_MANAGER_START and gets reset out from under us)
-  #
-  # ...but dmonitoringd itself still needs this param: it only runs its policy when
-  # sm.all_checks() passes, and that sub list includes carState/modelV2/liveCalibration/
-  # selfdriveState -- all only_onroad in this fork, so never alive. Result: it publishes an
-  # all-defaults driverMonitoringState (faceDetected=False forever) and the dmoji never moves.
-  # IsDriverViewEnabled is dmonitoringd's own built-in escape hatch for exactly this case
-  # (DM preview with no car): run_step(demo=True) feeds fake speed/calib and reads only
-  # driverStateV2. It's re-read live every ~2s, so setting it here (after manager cleared it)
-  # sticks. Also makes soundd run, which is harmless.
-  params.put_bool("IsDriverViewEnabled", True)
+  # is CLEAR_ON_MANAGER_START and gets reset out from under us). dmonitoringd forces its
+  # car-less demo path in this fork -- see the comment there.
   return [SettingsPage(), RecordPage()] + [CameraPage(n, s, dm) for n, s, dm in CAMERAS]
 
 
