@@ -129,10 +129,11 @@ procs = [
   PythonProcess("hardwared", "openpilot.system.hardware.hardwared", always_run),
   PythonProcess("modem", "openpilot.common.hardware.tici.modem", always_run, enabled=TICI),
   PythonProcess("tombstoned", "openpilot.system.tombstoned", always_run, enabled=not PC),
-  # recorder fork: disabled — the updater builds a finalized OverlayFS copy that gets swapped
-  # over /data/openpilot on launch, silently reverting local/synced changes. Also don't want
-  # upstream auto-updates overwriting the fork.
-  PythonProcess("updated", "openpilot.system.updated.updated", only_offroad, enabled=False),
+  # recorder fork: enabled. It tracks whatever remote+branch /data/openpilot is checked out on
+  # (this fork's master), not commaai's, so "check for update" pulls our own pushed commits.
+  # NOTE: it finalizes an OverlayFS copy that gets swapped over /data/openpilot on launch, so
+  # uncommitted on-device edits get reverted -- push to the fork to make a change stick.
+  PythonProcess("updated", "openpilot.system.updated.updated", only_offroad, enabled=not PC),
   # recorder fork: disabled — data stays on device, never uploaded to comma
   PythonProcess("uploader", "openpilot.system.loggerd.uploader", always_run, enabled=False),
   PythonProcess("feedbackd", "openpilot.selfdrive.ui.feedback.feedbackd", only_onroad),
