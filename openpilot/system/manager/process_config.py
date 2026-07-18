@@ -29,7 +29,9 @@ def ublox(started: bool, params: Params, CP: car.CarParams) -> bool:
   use_ublox = ublox_available()
   if use_ublox != params.get_bool("UbloxAvailable"):
     params.put_bool("UbloxAvailable", use_ublox, block=True)
-  return started and use_ublox
+  # recorder fork: GPS runs whenever the device is on, so it has time to acquire a fix
+  # (a cold u-blox fix takes minutes; waiting until "record" is pressed is too late)
+  return use_ublox
 
 def joystick(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and params.get_bool("JoystickDebugMode")
@@ -47,7 +49,8 @@ def not_long_maneuver(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and not params.get_bool("LongitudinalManeuverMode")
 
 def qcomgps(started: bool, params: Params, CP: car.CarParams) -> bool:
-  return started and not ublox_available()
+  # recorder fork: GPS runs whenever the device is on, so it has time to acquire a fix
+  return not ublox_available()
 
 def always_run(started: bool, params: Params, CP: car.CarParams) -> bool:
   return True
@@ -61,9 +64,13 @@ def only_offroad(started: bool, params: Params, CP: car.CarParams) -> bool:
 def livestream(started: bool, params: Params, CP: car.CarParams) -> bool:
   return params.get_bool("IsLiveStreaming")
 
+# data-recorder fork: the record path runs off this flag file, independent of car/ignition/CAN.
+# A file (not a param) so it needs no params_keys.h entry / C++ rebuild — syncable to a device
+# with just a manager restart. Lives in /tmp so recording defaults to OFF after a reboot.
+RECORDING_FLAG = "/tmp/recording"
+
 def recording(started: bool, params: Params, CP: car.CarParams) -> bool:
-  # data-recorder fork: record path runs on the Recording param, independent of a car/ignition
-  return params.get_bool("Recording")
+  return os.path.exists(RECORDING_FLAG)
 
 def or_(*fns):
   return lambda *args: operator.or_(*(fn(*args) for fn in fns))
@@ -93,9 +100,13 @@ procs = [
   PythonProcess("timed", "openpilot.system.timed", always_run, enabled=not PC),
 
   PythonProcess("modeld", "openpilot.selfdrive.modeld.modeld", only_onroad),
-  PythonProcess("dmonitoringmodeld", "openpilot.selfdrive.modeld.dmonitoringmodeld", driverview, enabled=(WEBCAM or not PC)),
+  # recorder fork: DM always on so the driver page's dmoji has live pose data (relying on the
+  # IsDriverViewEnabled param didn't work — it's CLEAR_ON_MANAGER_START and gets reset).
+  # ponytail: this keeps a NN running continuously; gate it on the driver page if power matters.
+  PythonProcess("dmonitoringmodeld", "openpilot.selfdrive.modeld.dmonitoringmodeld", always_run, enabled=(WEBCAM or not PC)),
 
-  PythonProcess("sensord", "openpilot.system.sensord.sensord", only_onroad, enabled=not PC),
+  # recorder fork: IMU always on — logged while recording, and shown live in the UI status line
+  PythonProcess("sensord", "openpilot.system.sensord.sensord", always_run, enabled=not PC),
   PythonProcess("ui", "openpilot.selfdrive.ui.ui", always_run, restart_if_crash=True),
   PythonProcess("soundd", "openpilot.selfdrive.ui.soundd", driverview),
   PythonProcess("locationd", "openpilot.selfdrive.locationd.locationd", only_onroad),
@@ -107,7 +118,7 @@ procs = [
   PythonProcess("selfdrived", "openpilot.selfdrive.selfdrived.selfdrived", only_onroad),
   PythonProcess("card", "openpilot.selfdrive.car.card", only_onroad),
   PythonProcess("deleter", "openpilot.system.loggerd.deleter", always_run),
-  PythonProcess("dmonitoringd", "openpilot.selfdrive.monitoring.dmonitoringd", driverview, enabled=(WEBCAM or not PC)),
+  PythonProcess("dmonitoringd", "openpilot.selfdrive.monitoring.dmonitoringd", always_run, enabled=(WEBCAM or not PC)),
   PythonProcess("qcomgpsd", "openpilot.system.qcomgpsd.qcomgpsd", qcomgps, enabled=TICI),
   PythonProcess("pandad", "openpilot.selfdrive.pandad.pandad", always_run),
   PythonProcess("paramsd", "openpilot.selfdrive.locationd.paramsd", only_onroad),
@@ -121,7 +132,10 @@ procs = [
   PythonProcess("hardwared", "openpilot.system.hardware.hardwared", always_run),
   PythonProcess("modem", "openpilot.common.hardware.tici.modem", always_run, enabled=TICI),
   PythonProcess("tombstoned", "openpilot.system.tombstoned", always_run, enabled=not PC),
-  PythonProcess("updated", "openpilot.system.updated.updated", only_offroad, enabled=not PC),
+  # recorder fork: disabled — the updater builds a finalized OverlayFS copy that gets swapped
+  # over /data/openpilot on launch, silently reverting local/synced changes. Also don't want
+  # upstream auto-updates overwriting the fork.
+  PythonProcess("updated", "openpilot.system.updated.updated", only_offroad, enabled=False),
   # recorder fork: disabled — data stays on device, never uploaded to comma
   PythonProcess("uploader", "openpilot.system.loggerd.uploader", always_run, enabled=False),
   PythonProcess("feedbackd", "openpilot.selfdrive.ui.feedback.feedbackd", only_onroad),

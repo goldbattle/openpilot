@@ -1,7 +1,8 @@
 import pyray as rl
 import openpilot.cereal.messaging as messaging
-from openpilot.selfdrive.ui.mici.layouts.home import MiciHomeLayout
+from openpilot.selfdrive.ui.mici.layouts.recorder import make_recorder_pages, START_PAGE
 from openpilot.selfdrive.ui.mici.layouts.settings.settings import SettingsLayout
+from openpilot.selfdrive.ui.mici.layouts.upload import UploadPage
 from openpilot.selfdrive.ui.mici.layouts.offroad_alerts import MiciOffroadAlerts
 from openpilot.selfdrive.ui.mici.onroad.augmented_road_view import AugmentedRoadView
 from openpilot.selfdrive.ui.ui_state import device, ui_state
@@ -27,24 +28,23 @@ class MiciMainLayout(Scroller):
     self._setup = False
 
     # Initialize widgets
-    self._home_layout = MiciHomeLayout()
+    # recorder fork: swipeable pages, left to right: settings button, record page
+    # (upload + record buttons), then WIDE / ROAD / DRIVER camera feeds.
+    self._recorder_pages = make_recorder_pages()
+    self._home_layout = self._recorder_pages[0]
     self._alerts_layout = MiciOffroadAlerts()
     self._settings_layout = SettingsLayout()
+    self._upload_layout = UploadPage()
     self._car_onroad_layout = AugmentedRoadView(bookmark_callback=self._on_bookmark_clicked)
     self._body_onroad_layout = BodyLayout()
 
     # Initialize widget rects
-    for widget in (self._home_layout, self._alerts_layout, self._settings_layout,
+    for widget in (*self._recorder_pages, self._alerts_layout, self._settings_layout, self._upload_layout,
                    self._car_onroad_layout, self._body_onroad_layout):
       # TODO: set parent rect and use it if never passed rect from render (like in Scroller)
       widget.set_rect(rl.Rectangle(0, 0, gui_app.width, gui_app.height))
 
-    self._scroller.add_widgets([
-      self._alerts_layout,
-      self._home_layout,
-      self._car_onroad_layout,
-      self._body_onroad_layout,
-    ])
+    self._scroller.add_widgets(list(self._recorder_pages))
     self._scroller.set_reset_scroll_at_show(False)
 
     # Disable scrolling when onroad is interacting with bookmark
@@ -56,10 +56,9 @@ class MiciMainLayout(Scroller):
     gui_app.add_nav_stack_tick(self._handle_transitions)
     gui_app.push_widget(self)
 
-    # Start onboarding if terms or training not completed, make sure to push after self
+    # recorder fork: skip onboarding/terms entirely — go straight to the camera + record UI.
+    # Kept as an object because _handle_transitions/_on_interactive_timeout test for it in the stack.
     self._onboarding_window = OnboardingWindow(lambda: gui_app.pop_widgets_to(self))
-    if not self._onboarding_window.completed:
-      gui_app.push_widget(self._onboarding_window)
 
   @property
   def _onroad_layout(self) -> Widget:
@@ -67,12 +66,9 @@ class MiciMainLayout(Scroller):
     return self._body_onroad_layout if ui_state.is_body else self._car_onroad_layout
 
   def _setup_callbacks(self):
-    self._home_layout.set_callbacks(
-      on_settings=lambda: gui_app.push_widget(self._settings_layout),
-      on_alerts=lambda: self._scroll_to(self._alerts_layout),
-      alert_count_callback=self._alerts_layout.active_alerts,
-      max_severity_callback=self._alerts_layout.max_severity,
-    )
+    for page in self._recorder_pages:
+      page.set_callbacks(on_settings=lambda: gui_app.push_widget(self._settings_layout),
+                        on_upload=lambda: gui_app.push_widget(self._upload_layout))
     for layout in (self._car_onroad_layout, self._body_onroad_layout):
       layout.set_click_callback(lambda: self._scroll_to(self._home_layout))
 
@@ -90,10 +86,8 @@ class MiciMainLayout(Scroller):
 
   def _render(self, _):
     if not self._setup:
-      if self._alerts_layout.active_alerts() > 0:
-        self._scroller.scroll_to(self._alerts_layout.rect.x)
-      else:
-        self._scroller.scroll_to(self._rect.width)
+      # recorder fork: start on WIDE (swipe left -> record page -> settings; right -> road, driver)
+      self._scroller.scroll_to(self._rect.width * START_PAGE)
       self._setup = True
 
     # Render

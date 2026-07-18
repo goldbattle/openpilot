@@ -213,6 +213,14 @@ class Widget(abc.ABC):
     """
     assert widget not in self._children, f"{type(widget).__name__} already a child of {type(self).__name__}"
     self._children.append(widget)
+
+    # Propagate touch validity down the tree. Scroller only wraps its DIRECT items
+    # (scroller.py), so nested widgets used to stay touchable while the user was scrolling —
+    # a swipe across a page could press buttons inside it. Chaining here means "if the parent
+    # can't be touched right now, neither can its children", for every nested widget.
+    parent_child_callback = widget._touch_valid_callback
+    widget.set_touch_valid_callback(
+      lambda: self._touch_valid() and (parent_child_callback() if parent_child_callback else True))
     return widget
 
   _show_hide_depth = 0

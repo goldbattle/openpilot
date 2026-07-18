@@ -49,6 +49,9 @@ dependencies = [
   "PyJWT[crypto]",
   "websocket_client",
 
+  # smb route upload (recorder fork)
+  "smbprotocol",
+
   # joystickd
   "inputs",
 

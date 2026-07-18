@@ -53,6 +53,9 @@ class UIState:
         "selfdriveState",
         "longitudinalPlan",
         "gpsLocationExternal",
+        # recorder fork: IMU for the camera status line
+        "accelerometer",
+        "gyroscope",
         "carOutput",
         "carControl",
         "liveParameters",

@@ -7,7 +7,6 @@
 
 inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"AccessToken", {CLEAR_ON_MANAGER_START | DONT_LOG, STRING}},
-    {"Recording", {CLEAR_ON_MANAGER_START, BOOL}},  // recorder fork: UI toggles this; gates loggerd/encoderd. resets off each boot
     {"AdbEnabled", {PERSISTENT, BOOL}},
     {"AlwaysOnDM", {PERSISTENT, BOOL}},
     {"ApiCache_Device", {PERSISTENT, STRING}},
@@ -113,6 +112,12 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"SecOCKey", {PERSISTENT | DONT_LOG, STRING}},
     {"ShowDebugInfo", {PERSISTENT, BOOL}},
     {"RouteCount", {PERSISTENT, INT, "0"}},
+    // recorder fork: SMB route upload settings
+    {"SmbHost", {PERSISTENT, STRING}},
+    {"SmbSharePath", {PERSISTENT, STRING}},
+    {"SmbUsername", {PERSISTENT, STRING}},
+    {"SmbPassword", {PERSISTENT | DONT_LOG, STRING}},
+    {"SmbWifiOnly", {PERSISTENT, BOOL}},
     {"SnoozeUpdate", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, BOOL}},
     {"SshEnabled", {PERSISTENT, BOOL}},
     {"UbloxAvailable", {PERSISTENT, BOOL}},
