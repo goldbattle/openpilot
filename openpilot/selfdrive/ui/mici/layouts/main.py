@@ -2,7 +2,7 @@ import pyray as rl
 import openpilot.cereal.messaging as messaging
 from openpilot.selfdrive.ui.mici.layouts.recorder import make_recorder_pages, START_PAGE
 from openpilot.selfdrive.ui.mici.layouts.settings.settings import SettingsLayout
-from openpilot.selfdrive.ui.mici.layouts.upload import RouteListPage
+from openpilot.selfdrive.ui.mici.layouts.upload import RouteListPage, upload_controller
 from openpilot.selfdrive.ui.mici.layouts.offroad_alerts import MiciOffroadAlerts
 from openpilot.selfdrive.ui.mici.onroad.augmented_road_view import AugmentedRoadView
 from openpilot.selfdrive.ui.ui_state import device, ui_state
@@ -94,6 +94,12 @@ class MiciMainLayout(Scroller):
     super()._render(self._rect)
 
   def _handle_transitions(self):
+    # recorder fork: auto-upload finished routes. Runs here because this is a nav-stack
+    # tick -- it fires every frame regardless of the visible page, so uploads no longer
+    # depend on the user sitting on the upload/settings page. Above the onboarding guard
+    # on purpose: onboarding is skipped in this fork and must not gate uploading.
+    upload_controller.tick()
+
     # Don't pop if onboarding
     if gui_app.widget_in_stack(self._onboarding_window):
       return

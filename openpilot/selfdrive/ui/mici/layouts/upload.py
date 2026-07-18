@@ -12,12 +12,17 @@ from openpilot.system.ui.widgets.label import gui_label, UnifiedLabel
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigInputDialog
+from openpilot.selfdrive.ui.mici.layouts.recorder import is_recording
 from openpilot.system.loggerd import smb_upload
 
 NetworkType = log.DeviceState.NetworkType
 
 ROUTE_POLL_INTERVAL = 2.0  # seconds
 PING_POLL_INTERVAL = 3.0  # seconds
+# Auto-upload retry spacing. smb_upload.run() has its own per-file backoff, but it returns
+# immediately if the session can't even be established (bad host, wrong password), so
+# without this a misconfigured share would respawn the worker every single frame.
+AUTO_RETRY_INTERVAL = 60.0
 ROW_HEIGHT = 44
 PAD = 10
 LABEL_FRACTION = 0.45  # left column width, of row width
@@ -171,6 +176,18 @@ class RouteRow(Widget):
                 font_size=18, color=rl.Color(180, 180, 180, 255), alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT)
 
 
+def should_auto_upload(uploading: bool, recording: bool, wifi_ok: bool, configured: bool,
+                       available: bool, has_pending: bool, now: float, next_attempt: float) -> bool:
+  """Pure predicate so the gating is testable without a device (see _self_check).
+
+  `recording` is the one that isn't just bookkeeping: loggerd is still appending segments
+  to the live route, so uploading mid-recording would push a route that's missing its tail.
+  list_routes already skips the segment holding an .lock, but that only protects the file
+  being written -- the *route* is still incomplete until recording stops."""
+  return (available and configured and wifi_ok and has_pending
+          and not uploading and not recording and now >= next_attempt)
+
+
 class UploadController:
   """Shared upload state (route scan, progress, the worker thread). Module singleton
   below, because the route list and the settings page are two separate nav-stack
@@ -185,6 +202,7 @@ class UploadController:
     self._live_progress: dict[str, tuple[int, int]] = {}
     self._progress_lock = threading.Lock()
     self._last_error: str | None = None
+    self._next_auto = 0.0
     threading.Thread(target=self._scan_worker, daemon=True).start()
 
   def _scan_worker(self):
@@ -200,6 +218,22 @@ class UploadController:
     if self._pending_routes is not None:
       self._routes = self._pending_routes
       self._pending_routes = None
+
+  def tick(self) -> None:
+    """Auto-upload driver. Driven from main.py's nav-stack tick rather than a page's
+    _update_state, so it keeps running no matter which page is on screen -- and from the
+    UI thread, so reading ui_state.sm (wifi_ok) doesn't race the thread that updates it."""
+    self.update()
+    if should_auto_upload(uploading=self.is_uploading(),
+                          recording=is_recording(),
+                          wifi_ok=self.wifi_ok(),
+                          configured=bool(self._params.get("SmbHost") and self._params.get("SmbSharePath")),
+                          available=smb_upload.available(),
+                          has_pending=any(not r.is_done for r in self._routes),
+                          now=time.monotonic(),
+                          next_attempt=self._next_auto):
+      self._next_auto = time.monotonic() + AUTO_RETRY_INTERVAL
+      self.start_upload()
 
   def routes(self) -> list[smb_upload.Route]:
     return self._routes
@@ -394,6 +428,19 @@ def _self_check() -> None:
   assert fmt_size(int(1.25 * 1024**3)) == "1.2G", fmt_size(int(1.25 * 1024**3))
   # must not roll over into a unit that isn't rendered
   assert fmt_size(4096 * 1024**3).endswith("G"), fmt_size(4096 * 1024**3)
+
+  ok = dict(uploading=False, recording=False, wifi_ok=True, configured=True,
+            available=True, has_pending=True, now=100.0, next_attempt=0.0)
+  assert should_auto_upload(**ok)
+  # every gate must independently block it
+  assert not should_auto_upload(**{**ok, "recording": True}), "must not upload mid-recording"
+  assert not should_auto_upload(**{**ok, "uploading": True}), "must not double-start"
+  assert not should_auto_upload(**{**ok, "wifi_ok": False})
+  assert not should_auto_upload(**{**ok, "configured": False})
+  assert not should_auto_upload(**{**ok, "available": False})
+  assert not should_auto_upload(**{**ok, "has_pending": False})
+  assert not should_auto_upload(**{**ok, "now": 10.0, "next_attempt": 60.0}), "must respect backoff"
+  assert should_auto_upload(**{**ok, "now": 60.0, "next_attempt": 60.0}), "backoff expires"
   print("upload self-check OK")
 
 
