@@ -205,6 +205,9 @@ class UploadController:
   def start_upload(self) -> None:
     if self.is_uploading():
       return
+    if not smb_upload.available():
+      self._last_error = smb_upload.SMB_UNAVAILABLE
+      return
     host = self._params.get("SmbHost") or ""
     share = self._params.get("SmbSharePath") or ""
     if not host or not share:
@@ -303,7 +306,9 @@ class SmbSettingsPage(NavScroller):
   def _ping_worker(self):
     while True:
       host = self._params.get("SmbHost") or ""
-      if not host:
+      if not smb_upload.available():
+        self._pending_status = smb_upload.SMB_UNAVAILABLE
+      elif not host:
         self._pending_status = "set a host below"
       else:
         ms = smb_upload.check_reachable(host)

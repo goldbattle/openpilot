@@ -81,6 +81,11 @@ function launch {
   # hardware specific init
   if [ -f /AGNOS ]; then
     agnos_init
+
+    # recorder fork: our extra python deps live on /data, because an AGNOS update
+    # replaces the rootfs venv they'd otherwise sit in. No-op once installed; never
+    # block launch if it can't reach the network -- smb_upload degrades gracefully.
+    ./scripts/install_device_deps.sh --if-missing || true
   fi
 
   # write tmux scrollback to a file

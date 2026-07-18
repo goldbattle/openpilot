@@ -8,12 +8,26 @@ xattr-based "is this file done" bookkeeping, under a different attribute name.
 import os
 import re
 import socket
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 
-import smbclient
+# On device, smbprotocol is not part of the AGNOS venv -- that lives on the read-only
+# rootfs, which AGNOS updates replace wholesale, taking anything pip-installed there
+# with it. scripts/install_device_deps.sh puts it on /data instead, which persists.
+# Appended (not prepended) so the venv's own packages still win where they overlap.
+DEVICE_LIBS = "/data/pylibs"
+if os.path.isdir(DEVICE_LIBS) and DEVICE_LIBS not in sys.path:
+  sys.path.append(DEVICE_LIBS)
+
+try:
+  import smbclient
+except ImportError:
+  # Degrade to "SMB unavailable" instead of taking down every importer of this
+  # module -- the UI imports it transitively, so a hard failure here blanks the screen.
+  smbclient = None
 
 from openpilot.common.hardware.hw import Paths
 from openpilot.common.swaglog import cloudlog
@@ -30,6 +44,12 @@ MAX_BACKOFF = 60.0
 NO_NETWORK_POLL = 5.0
 SESSION_TIMEOUT = 8.0  # give up fast on a bad host/share instead of hanging indefinitely
 SMB_PORT = 445
+SMB_UNAVAILABLE = "smbprotocol not installed"
+
+
+def available() -> bool:
+  """False when smbprotocol is missing; callers should surface SMB_UNAVAILABLE."""
+  return smbclient is not None
 
 
 # A recorded segment dir, as built by logger.cc: "%08x--<10 hex>--<part>"
@@ -128,6 +148,8 @@ def check_reachable(host: str, port: int = SMB_PORT, timeout: float = 3.0) -> fl
 
 def test_connection(host: str, share_path: str, username: str, password: str) -> str | None:
   """Try to reach the share. Returns an error message, or None on success."""
+  if smbclient is None:
+    return SMB_UNAVAILABLE
   try:
     smbclient.register_session(host, username=username or "", password=password or "", connection_timeout=SESSION_TIMEOUT)
     root = _unc_path(host, share_path)
@@ -201,6 +223,10 @@ def run(host: str, share_path: str, username: str, password: str, routes: list[R
   """Upload every not-yet-done file across `routes`, oldest route first. Retries
   forever with capped exponential backoff on failure (bad connection, share down,
   Wi-Fi dropped mid-transfer, ...) until everything is done or stop_event is set."""
+  if smbclient is None:
+    if on_error:
+      on_error(SMB_UNAVAILABLE)
+    return
   try:
     smbclient.register_session(host, username=username or "", password=password or "", connection_timeout=SESSION_TIMEOUT)
   except Exception as e:
