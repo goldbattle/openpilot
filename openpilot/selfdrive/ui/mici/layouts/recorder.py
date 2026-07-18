@@ -1,4 +1,5 @@
 import math
+import time
 import pyray as rl
 from collections import deque
 from collections.abc import Callable
@@ -37,18 +38,39 @@ class _RecordingState:
     self._params = Params()
     self._value = False
     self._last_read = -1.0
+    # monotonic, not time.time(): the device slews/jumps its wall clock on GPS+NTP sync,
+    # which would make the elapsed counter leap or go negative mid-recording.
+    self._started_at: float | None = None
+
+  def _mark(self, recording: bool) -> None:
+    """Start the clock on a False->True edge; leave it running otherwise so a repeated
+    True (every poll) doesn't keep resetting elapsed to zero."""
+    if recording and self._started_at is None:
+      self._started_at = time.monotonic()
+    elif not recording:
+      self._started_at = None
 
   def get(self) -> bool:
     now = rl.get_time()
     if now - self._last_read > self.REFRESH_S:
       self._value = self._params.get_bool("Recording")
       self._last_read = now
+      # catches edges from outside the UI too (manager clears it, or a CLI param write)
+      self._mark(self._value)
     return self._value
+
+  def elapsed(self) -> float | None:
+    # ponytail: measured from when this UI process first saw Recording=True, not from when
+    # loggerd actually started. Identical in the normal case (the UI is what sets the param);
+    # only undercounts if the UI restarts mid-recording. Reading the true start would mean
+    # stat'ing the current route's segments every frame -- not worth it for a status line.
+    return None if self._started_at is None else time.monotonic() - self._started_at
 
   def set(self, recording: bool) -> None:
     self._params.put_bool("Recording", recording, block=True)
     self._value = recording  # reflect immediately so the button doesn't lag the tap
     self._last_read = rl.get_time()
+    self._mark(recording)
 
 
 _recording_state = _RecordingState()
@@ -60,6 +82,16 @@ def is_recording() -> bool:
 
 def set_recording(recording: bool) -> None:
   _recording_state.set(recording)
+
+
+def recording_elapsed_str() -> str:
+  """Elapsed recording time as h:mm. Hours are unbounded (no % 24) -- this is a session
+  length, so a 30h recording should read 30:00, not roll over to 6:00."""
+  secs = _recording_state.elapsed()
+  if secs is None:
+    return ""
+  total_min = int(secs) // 60
+  return f"{total_min // 60}:{total_min % 60:02d}"
 
 
 def _magnitude(v) -> float:
@@ -176,7 +208,7 @@ class CameraPage(_RecorderPage):
     if is_recording():  # blinking REC while recording
       if int(rl.get_time() * 2) % 2 == 0:
         rl.draw_circle(int(rect.x + PAD + 12), int(rect.y + 40), 7, rl.RED)
-      gui_label(rl.Rectangle(rect.x + PAD + 24, rect.y + 28, 120, 24), "REC",
+      gui_label(rl.Rectangle(rect.x + PAD + 24, rect.y + 28, 180, 24), f"REC  {recording_elapsed_str()}",
                 font_size=22, font_weight=FontWeight.BOLD, color=rl.RED)
 
 

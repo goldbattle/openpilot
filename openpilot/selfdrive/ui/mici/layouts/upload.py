@@ -21,6 +21,21 @@ PING_POLL_INTERVAL = 3.0  # seconds
 ROW_HEIGHT = 44
 PAD = 10
 LABEL_FRACTION = 0.45  # left column width, of row width
+# RouteRow is three columns: label | size | status. Sizes are right-aligned so the
+# numbers line up down the list.
+ROUTE_LABEL_FRACTION = 0.58
+ROUTE_SIZE_FRACTION = 0.80
+
+
+def fmt_size(num_bytes: int) -> str:
+  """Compact byte size, e.g. '1.2G'. Segments run to hundreds of MB, so K is the
+  smallest unit worth showing."""
+  size = float(num_bytes)
+  for unit in ("K", "M", "G"):
+    size /= 1024.0
+    if size < 1024.0 or unit == "G":
+      return f"{size:.1f}{unit}"
+  return f"{size:.1f}G"
 
 
 def draw_up_arrow(cx: float, cy: float, size: float, color: rl.Color = rl.WHITE) -> None:
@@ -135,15 +150,24 @@ class RouteRow(Widget):
   def _render(self, rect: rl.Rectangle):
     rl.draw_line_ex(rl.Vector2(rect.x, rect.y + rect.height - 1), rl.Vector2(rect.x + rect.width, rect.y + rect.height - 1),
                     1.0, rl.Color(255, 255, 255, 35))
-    gui_label(rl.Rectangle(rect.x + PAD, rect.y, rect.width * 0.75, rect.height), self._label,
+    gui_label(rl.Rectangle(rect.x + PAD, rect.y, rect.width * ROUTE_LABEL_FRACTION, rect.height), self._label,
               font_size=20, font_weight=FontWeight.BOLD)
+
+    # total_size is summed from the sizes list_routes already stat'd, so this is just
+    # adding ints -- no filesystem work per frame. Read off self.route (not cached) because
+    # the scan swaps in a fresh Route as later segments of a still-growing route land.
+    size_x = rect.x + rect.width * ROUTE_LABEL_FRACTION
+    gui_label(rl.Rectangle(size_x, rect.y, rect.width * (ROUTE_SIZE_FRACTION - ROUTE_LABEL_FRACTION), rect.height),
+              fmt_size(self.route.total_size), font_size=18, color=rl.Color(180, 180, 180, 255),
+              alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT)
 
     if self.route.is_done:
       rl.draw_texture_ex(self._checkmark, rl.Vector2(rect.x + rect.width - PAD - self._checkmark.width,
                                                       rect.y + (rect.height - self._checkmark.height) / 2), 0, 1.0, rl.WHITE)
     else:
       status = f"{int(self._progress * 100)}%" if self._progress > 0 else "pending"
-      gui_label(rl.Rectangle(rect.x + rect.width * 0.75, rect.y, rect.width * 0.25 - PAD, rect.height), status,
+      gui_label(rl.Rectangle(rect.x + rect.width * ROUTE_SIZE_FRACTION, rect.y,
+                             rect.width * (1 - ROUTE_SIZE_FRACTION) - PAD, rect.height), status,
                 font_size=18, color=rl.Color(180, 180, 180, 255), alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT)
 
 
@@ -363,7 +387,22 @@ class SmbSettingsPage(NavScroller):
     self._scroller.render(rl.Rectangle(rect.x, rect.y + 28, rect.width, rect.height - 28))
 
 
+def _self_check() -> None:
+  assert fmt_size(0) == "0.0K", fmt_size(0)
+  assert fmt_size(1536) == "1.5K", fmt_size(1536)
+  assert fmt_size(5 * 1024**2) == "5.0M", fmt_size(5 * 1024**2)
+  assert fmt_size(int(1.25 * 1024**3)) == "1.2G", fmt_size(int(1.25 * 1024**3))
+  # must not roll over into a unit that isn't rendered
+  assert fmt_size(4096 * 1024**3).endswith("G"), fmt_size(4096 * 1024**3)
+  print("upload self-check OK")
+
+
 if __name__ == "__main__":
+  import sys
+  if "--check" in sys.argv:
+    _self_check()
+    raise SystemExit
+
   gui_app.init_window("upload")
   page = RouteListPage()
   gui_app.push_widget(page)
