@@ -7,11 +7,10 @@ from openpilot.cereal import log
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.system.ui.widgets import Widget
-from openpilot.system.ui.widgets.scroller import Scroller, NavScroller
+from openpilot.system.ui.widgets.scroller import NavScroller
 from openpilot.system.ui.widgets.label import gui_label, UnifiedLabel
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.selfdrive.ui.mici.widgets.button import BigTileButton
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigInputDialog
 from openpilot.system.loggerd import smb_upload
 
@@ -22,6 +21,17 @@ PING_POLL_INTERVAL = 3.0  # seconds
 ROW_HEIGHT = 44
 PAD = 10
 LABEL_FRACTION = 0.45  # left column width, of row width
+
+
+def draw_up_arrow(cx: float, cy: float, size: float, color: rl.Color = rl.WHITE) -> None:
+  """Upload glyph, centered on (cx, cy). Drawn rather than a texture -- there's no
+  upward-arrow asset in icons_mici/ and this is the only place that needs one."""
+  head_h = size * 0.45
+  shaft_w = size * 0.28
+  top = cy - size / 2
+  rl.draw_triangle(rl.Vector2(cx, top), rl.Vector2(cx - size / 2, top + head_h),
+                   rl.Vector2(cx + size / 2, top + head_h), color)
+  rl.draw_rectangle(int(cx - shaft_w / 2), int(top + head_h), int(shaft_w), int(size * 0.55), color)
 
 
 class _Row(Widget):
@@ -87,7 +97,7 @@ class _ToggleRow(Widget):
 
 
 class RouteRow(Widget):
-  """One route: short date/time label, and a percent (or checkmark once done)."""
+  """One route: number + recording time + hash, and a percent (or checkmark once done)."""
 
   def __init__(self, route: smb_upload.Route):
     super().__init__()
@@ -96,6 +106,25 @@ class RouteRow(Widget):
     self._progress = 0.0  # live in-flight progress (0..1), separate from route.is_done
     self._checkmark = gui_app.texture("icons/checkmark.png", 22, 22)
 
+    # route id is "<counter>--<random>"; the counter is a monotonic route number, used
+    # both in the label and to sort newest-first in RouteListPage
+    counter_hex, _, rand_hex = route.id.partition("--")
+    try:
+      self.route_num = int(counter_hex, 16)
+    except ValueError:
+      self.route_num = 0
+
+    # Computed once: neither the recording time nor the id ever change, and this would
+    # otherwise stat every file of every route on every frame.
+    # NOTE: mtime, not ctime -- ctime is the inode-change time, which our own upload
+    # marker (setxattr in smb_upload) bumps, so ctime would show the UPLOAD time.
+    try:
+      recorded_at = min(os.path.getmtime(f.path) for f in route.files)
+      time_str = time.strftime("%m/%d %H:%M:%S", time.localtime(recorded_at))
+    except (OSError, ValueError):
+      time_str = "--/-- --:--:--"
+    self._label = f"#{self.route_num}  {time_str}  {rand_hex}"
+
   def set_parent_rect(self, parent_rect: rl.Rectangle) -> None:
     super().set_parent_rect(parent_rect)
     self._rect.width = parent_rect.width
@@ -103,26 +132,10 @@ class RouteRow(Widget):
   def set_progress(self, done: int, total: int) -> None:
     self._progress = (done / total) if total else 0.0
 
-  def _label(self) -> str:
-    # route id is "<counter>--<random>" -- the counter is a monotonic route number,
-    # so pull that out plus a few chars of the random part; rows recorded close
-    # together otherwise show the same minute and look identical.
-    counter_hex, _, rand_hex = self.route.id.partition("--")
-    try:
-      route_num = int(counter_hex, 16)
-    except ValueError:
-      route_num = 0
-    try:
-      ctime = os.path.getctime(self.route.files[0].path)
-      time_str = time.strftime("%H:%M:%S", time.localtime(ctime))
-    except (OSError, IndexError):
-      time_str = "--:--:--"
-    return f"#{route_num}  {time_str}  {rand_hex[:4]}"
-
   def _render(self, rect: rl.Rectangle):
     rl.draw_line_ex(rl.Vector2(rect.x, rect.y + rect.height - 1), rl.Vector2(rect.x + rect.width, rect.y + rect.height - 1),
                     1.0, rl.Color(255, 255, 255, 35))
-    gui_label(rl.Rectangle(rect.x + PAD, rect.y, rect.width * 0.5, rect.height), self._label(),
+    gui_label(rl.Rectangle(rect.x + PAD, rect.y, rect.width * 0.75, rect.height), self._label,
               font_size=20, font_weight=FontWeight.BOLD)
 
     if self.route.is_done:
@@ -130,117 +143,142 @@ class RouteRow(Widget):
                                                       rect.y + (rect.height - self._checkmark.height) / 2), 0, 1.0, rl.WHITE)
     else:
       status = f"{int(self._progress * 100)}%" if self._progress > 0 else "pending"
-      gui_label(rl.Rectangle(rect.x + rect.width * 0.5, rect.y, rect.width * 0.5 - PAD, rect.height), status,
+      gui_label(rl.Rectangle(rect.x + rect.width * 0.75, rect.y, rect.width * 0.25 - PAD, rect.height), status,
                 font_size=18, color=rl.Color(180, 180, 180, 255), alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT)
 
 
-class FileListPage(Scroller):
-  """Route list only -- uploading is triggered from the next page over."""
+class UploadController:
+  """Shared upload state (route scan, progress, the worker thread). Module singleton
+  below, because the route list and the settings page are two separate nav-stack
+  widgets that both need it -- same pattern as ui_state."""
 
-  def __init__(self, parent: 'UploadPage'):
+  def __init__(self):
+    self._params = Params()
+    self._routes: list[smb_upload.Route] = []
+    self._pending_routes: list[smb_upload.Route] | None = None
+    self._upload_thread: threading.Thread | None = None
+    self._stop_event = threading.Event()
+    self._live_progress: dict[str, tuple[int, int]] = {}
+    self._progress_lock = threading.Lock()
+    self._last_error: str | None = None
+    threading.Thread(target=self._scan_worker, daemon=True).start()
+
+  def _scan_worker(self):
+    while True:
+      try:
+        self._pending_routes = smb_upload.list_routes()
+      except Exception:
+        cloudlog.exception("smb list_routes failed")
+      time.sleep(ROUTE_POLL_INTERVAL)
+
+  def update(self) -> None:
+    """Called from a page's _update_state -- swaps in the latest scan on the UI thread."""
+    if self._pending_routes is not None:
+      self._routes = self._pending_routes
+      self._pending_routes = None
+
+  def routes(self) -> list[smb_upload.Route]:
+    return self._routes
+
+  def progress_for(self, route_id: str) -> tuple[int, int] | None:
+    with self._progress_lock:
+      return self._live_progress.get(route_id)
+
+  def is_uploading(self) -> bool:
+    return self._upload_thread is not None and self._upload_thread.is_alive()
+
+  def status_text(self) -> str:
+    if self.is_uploading():
+      return "uploading..."
+    if self._last_error:
+      return self._last_error
+    if not self._routes:
+      return "no recordings"
+    pending = sum(1 for r in self._routes if not r.is_done)
+    return "all uploaded" if pending == 0 else f"{pending} pending"
+
+  def wifi_ok(self) -> bool:
+    if not self._params.get_bool("SmbWifiOnly"):
+      return True
+    return ui_state.sm["deviceState"].networkType == NetworkType.wifi
+
+  def start_upload(self) -> None:
+    if self.is_uploading():
+      return
+    host = self._params.get("SmbHost") or ""
+    share = self._params.get("SmbSharePath") or ""
+    if not host or not share:
+      self._last_error = "set host + share first"
+      return
+    username = self._params.get("SmbUsername") or ""
+    password = self._params.get("SmbPassword") or ""
+
+    self._stop_event = threading.Event()
+    self._last_error = None
+
+    def progress_cb(route: smb_upload.Route, done: int, total: int):
+      with self._progress_lock:
+        self._live_progress[route.id] = (done, total)
+
+    def on_error(msg: str):
+      self._last_error = msg
+
+    def worker():
+      smb_upload.run(host, share, username, password, self._routes, self.wifi_ok,
+                     progress_cb, self._stop_event, on_error=on_error)
+
+    self._upload_thread = threading.Thread(target=worker, daemon=True)
+    self._upload_thread.start()
+
+
+upload_controller = UploadController()
+
+
+class RouteListPage(NavScroller):
+  """The upload page: just the recorded routes and their upload status. Uploading is
+  started from the SMB tile in settings."""
+
+  def __init__(self):
     super().__init__(horizontal=False, spacing=0, pad=8)
-    self._parent = parent
     self._rows: dict[str, RouteRow] = {}
     self._empty_label = UnifiedLabel("no recordings yet", 24, FontWeight.DISPLAY, rl.WHITE,
                                      alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER,
                                      alignment_vertical=rl.GuiTextAlignmentVertical.TEXT_ALIGN_MIDDLE)
 
-  def _refresh_rows(self):
-    for route in self._parent.routes():
+  def _update_state(self):
+    super()._update_state()
+    upload_controller.update()
+    added = False
+    for route in upload_controller.routes():
       row = self._rows.get(route.id)
       if row is None:
         row = RouteRow(route)
         self._rows[route.id] = row
         self._scroller.add_widget(row)
+        added = True
       else:
         row.route = route  # Route is rebuilt fresh each scan; swap in the latest done-state
-      live = self._parent.progress_for(route.id)
+      live = upload_controller.progress_for(route.id)
       if live:
         row.set_progress(*live)
 
-  def _update_state(self):
-    super()._update_state()
-    self._refresh_rows()
+    # newest first. The controller keeps routes oldest-first (upload order, matching
+    # uploader.py); only the display is reversed. Sorting _scroller.items in place is
+    # the same thing MiciOffroadAlerts does to reorder by severity.
+    if added:
+      self._scroller.items.sort(key=lambda r: -r.route_num)
 
   def _render(self, rect: rl.Rectangle):
-    if not self._parent.routes():
+    if not upload_controller.routes():
       self._empty_label.render(rect)
       return
     super()._render(rect)
 
-  def at_top(self) -> bool:
-    return self._scroller.scroll_panel.get_offset() >= -20
 
-
-class UploadTileButton(BigTileButton):
-  """BigTileButton with a hand-drawn upward arrow in the same top-right icon slot
-  BigButton normally puts a texture icon -- there's no upload-arrow asset, so this
-  is the only place in the UI that draws this particular glyph."""
-  ICON_SIZE = 64  # matches the icon size other big buttons (SettingsBigButton etc.) use
-
-  def __init__(self, width: float, height: float):
-    super().__init__(width, height, "upload all")
-
-  def _draw_content(self, btn_y: float):
-    super()._draw_content(btn_y)  # draws the "upload all" label; icon=None so no texture drawn
-    cx = self._rect.x + self._rect.width - 30 - self.ICON_SIZE / 2
-    cy = btn_y + 30 + self.ICON_SIZE / 2
-    s = self.ICON_SIZE * 0.8
-    head_h = s * 0.45
-    shaft_w = s * 0.28
-    top = cy - s / 2
-    rl.draw_triangle(rl.Vector2(cx, top), rl.Vector2(cx - s / 2, top + head_h), rl.Vector2(cx + s / 2, top + head_h), rl.WHITE)
-    rl.draw_rectangle(int(cx - shaft_w / 2), int(top + head_h), int(shaft_w), int(s * 0.55), rl.WHITE)
-
-
-class UploadTriggerPage(Widget):
-  """The whole page is the button -- tap anywhere to upload everything not yet
-  uploaded. No permanent caption; a message only appears while uploading or if
-  something's actually wrong (missing config, connection failure, ...)."""
-  MARGIN = 20
-
-  def __init__(self, parent: 'UploadPage'):
-    super().__init__()
-    self._parent = parent
-    self._btn = self._child(UploadTileButton(gui_app.width - self.MARGIN * 2, gui_app.height - self.MARGIN * 2))
-    self._btn.set_click_callback(self._on_click)
-    self._start_error: str | None = None
-
-  def _on_click(self):
-    ok, err = self._parent.start_upload()
-    self._start_error = err if not ok else None
-
-  def _status_text(self) -> str | None:
-    if self._parent.is_uploading():
-      return "uploading..."
-    return self._start_error or self._parent.last_error()
-
-  def at_top(self) -> bool:
-    return True  # no scrollable content on this page
-
-  def _render(self, rect: rl.Rectangle):
-    rl.draw_rectangle_rec(rect, rl.Color(0, 0, 0, 255))
-    self._btn.set_position(rect.x + self.MARGIN, rect.y + self.MARGIN)
-    self._btn.render()
-
-    text = self._status_text()
-    if text:
-      is_error = not self._parent.is_uploading()
-      gui_label(rl.Rectangle(rect.x + PAD, rect.y + rect.height - 32, rect.width - 2 * PAD, 26), text,
-                font_size=18, alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER,
-                color=rl.Color(220, 90, 90, 255) if is_error else rl.WHITE)
-
-
-class ServerSettingsPage(Scroller):
-  """Host / share path / username / password / Wi-Fi-only toggle, plus a live
-  reachability + ping status line up top instead of a manual test button (a bad
-  host with no timeout made the old button-triggered check look like a freeze).
-
-  Extends Scroller directly (like FileListPage) rather than wrapping a child
-  Scroller -- rows added through a nested Scroller's private ._scroller bypass
-  the parent-disables-child touch-valid chain (_Scroller.add_widget wires each
-  item's touch validity to that _Scroller's own .enabled, not to whatever's
-  above it), so they kept accepting taps underneath the on-screen keyboard."""
+class SmbSettingsPage(NavScroller):
+  """The settings tile: upload-all action plus the SMB server config. A live
+  reachability + ping line sits at the top instead of a manual test button (a bad
+  host with no timeout made the old button-triggered check look like a freeze)."""
 
   def __init__(self):
     super().__init__(horizontal=False, spacing=0, pad=8)
@@ -252,19 +290,21 @@ class ServerSettingsPage(Scroller):
     self._pending_status: str | None = None
     threading.Thread(target=self._ping_worker, daemon=True).start()
 
+    self._upload_row = _Row("upload all", upload_controller.start_upload)
     self._host_row = self._make_field_row("host", "SmbHost", "enter host or IP...")
     self._share_row = self._make_field_row("share path", "SmbSharePath", "enter share name...")
     self._user_row = self._make_field_row("username", "SmbUsername", "enter username, blank for guest...")
     self._pass_row = _Row("password", self._edit_password)
     self._wifi_row = _ToggleRow("Wi-Fi only", "SmbWifiOnly")
 
-    self._scroller.add_widgets([self._host_row, self._share_row, self._user_row, self._pass_row, self._wifi_row])
+    self._scroller.add_widgets([self._upload_row, self._host_row, self._share_row,
+                                self._user_row, self._pass_row, self._wifi_row])
 
   def _ping_worker(self):
     while True:
       host = self._params.get("SmbHost") or ""
       if not host:
-        self._pending_status = "set a host below to check reachability"
+        self._pending_status = "set a host below"
       else:
         ms = smb_upload.check_reachable(host)
         self._pending_status = f"reachable  {ms:.0f}ms" if ms is not None else "unreachable"
@@ -272,9 +312,11 @@ class ServerSettingsPage(Scroller):
 
   def _update_state(self):
     super()._update_state()
+    upload_controller.update()
     if self._pending_status is not None:
       self._status_text = self._pending_status
       self._pending_status = None
+    self._upload_row.set_value(upload_controller.status_text())
     self._pass_row.set_value("********" if self._params.get("SmbPassword") else "")
 
   def _make_field_row(self, label: str, param: str, hint: str) -> _Row:
@@ -315,115 +357,10 @@ class ServerSettingsPage(Scroller):
               color=rl.Color(51, 171, 76, 255) if reachable else rl.Color(220, 90, 90, 255))
     self._scroller.render(rl.Rectangle(rect.x, rect.y + 28, rect.width, rect.height - 28))
 
-  def at_top(self) -> bool:
-    return self._scroller.scroll_panel.get_offset() >= -20
-
-
-class UploadPage(NavScroller):
-  """Swipeable: file list -> upload-all button -> server settings."""
-
-  def __init__(self):
-    super().__init__()
-    # NavScroller can't take Scroller kwargs through its constructor (NavWidget.__init__
-    # doesn't forward them), so configure the inner _Scroller directly -- same snap/no-gap
-    # setup the main recorder pages use in main.py.
-    self._scroller._snap_items = True
-    self._scroller._spacing = 0
-    self._scroller._pad = 0
-
-    self._params = Params()
-    self._routes: list[smb_upload.Route] = []
-    self._pending_routes: list[smb_upload.Route] | None = None
-    threading.Thread(target=self._scan_worker, daemon=True).start()
-
-    self._upload_thread: threading.Thread | None = None
-    self._stop_event = threading.Event()
-    self._live_progress: dict[str, tuple[int, int]] = {}
-    self._progress_lock = threading.Lock()
-    self._last_error: str | None = None
-
-    self._file_list = FileListPage(self)
-    self._trigger = UploadTriggerPage(self)
-    self._settings = ServerSettingsPage()
-    self._pages = [self._file_list, self._trigger, self._settings]
-    for page in self._pages:
-      page.set_rect(rl.Rectangle(0, 0, gui_app.width, gui_app.height))
-    self._scroller.add_widgets(self._pages)
-
-  def _back_enabled(self) -> bool:
-    # NavScroller's default lets a horizontal scroller always dismiss regardless of
-    # scroll position -- fine when pages don't scroll themselves, but each page here
-    # has its own vertical list, so swiping up through a long list (a "swipe down"
-    # gesture) was also arming the dismiss-the-whole-page swipe. Only allow it once
-    # the active page's own list is scrolled to the top (same rule NavRawScrollPanel/
-    # the regulatory-info page uses).
-    offset = -self._scroller.scroll_panel.get_offset()
-    idx = max(0, min(round(offset / gui_app.width), len(self._pages) - 1)) if gui_app.width else 0
-    return self._pages[idx].at_top()
-
-  def _scan_worker(self):
-    while True:
-      try:
-        self._pending_routes = smb_upload.list_routes()
-      except Exception:
-        cloudlog.exception("smb list_routes failed")
-      time.sleep(ROUTE_POLL_INTERVAL)
-
-  def _update_state(self):
-    super()._update_state()
-    if self._pending_routes is not None:
-      self._routes = self._pending_routes
-      self._pending_routes = None
-
-  def routes(self) -> list[smb_upload.Route]:
-    return self._routes
-
-  def progress_for(self, route_id: str) -> tuple[int, int] | None:
-    with self._progress_lock:
-      return self._live_progress.get(route_id)
-
-  def is_uploading(self) -> bool:
-    return self._upload_thread is not None and self._upload_thread.is_alive()
-
-  def last_error(self) -> str | None:
-    return self._last_error
-
-  def wifi_ok(self) -> bool:
-    if not self._params.get_bool("SmbWifiOnly"):
-      return True
-    return ui_state.sm["deviceState"].networkType == NetworkType.wifi
-
-  def start_upload(self) -> tuple[bool, str | None]:
-    if self.is_uploading():
-      return False, "already uploading"
-    host = self._params.get("SmbHost") or ""
-    share = self._params.get("SmbSharePath") or ""
-    if not host or not share:
-      return False, "set host + share path first"
-    username = self._params.get("SmbUsername") or ""
-    password = self._params.get("SmbPassword") or ""
-
-    self._stop_event = threading.Event()
-    self._last_error = None
-
-    def progress_cb(route: smb_upload.Route, done: int, total: int):
-      with self._progress_lock:
-        self._live_progress[route.id] = (done, total)
-
-    def on_error(msg: str):
-      self._last_error = msg
-
-    def worker():
-      smb_upload.run(host, share, username, password, self._routes, self.wifi_ok, progress_cb, self._stop_event, on_error=on_error)
-
-    self._upload_thread = threading.Thread(target=worker, daemon=True)
-    self._upload_thread.start()
-    return True, None
-
 
 if __name__ == "__main__":
   gui_app.init_window("upload")
-  page = UploadPage()
+  page = RouteListPage()
+  gui_app.push_widget(page)
   for _ in gui_app.render():
     ui_state.update()
-    page.render(rl.Rectangle(0, 0, gui_app.width, gui_app.height))

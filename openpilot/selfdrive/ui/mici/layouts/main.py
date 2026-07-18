@@ -2,7 +2,7 @@ import pyray as rl
 import openpilot.cereal.messaging as messaging
 from openpilot.selfdrive.ui.mici.layouts.recorder import make_recorder_pages, START_PAGE
 from openpilot.selfdrive.ui.mici.layouts.settings.settings import SettingsLayout
-from openpilot.selfdrive.ui.mici.layouts.upload import UploadPage
+from openpilot.selfdrive.ui.mici.layouts.upload import RouteListPage
 from openpilot.selfdrive.ui.mici.layouts.offroad_alerts import MiciOffroadAlerts
 from openpilot.selfdrive.ui.mici.onroad.augmented_road_view import AugmentedRoadView
 from openpilot.selfdrive.ui.ui_state import device, ui_state
@@ -34,7 +34,7 @@ class MiciMainLayout(Scroller):
     self._home_layout = self._recorder_pages[0]
     self._alerts_layout = MiciOffroadAlerts()
     self._settings_layout = SettingsLayout()
-    self._upload_layout = UploadPage()
+    self._upload_layout = RouteListPage()
     self._car_onroad_layout = AugmentedRoadView(bookmark_callback=self._on_bookmark_clicked)
     self._body_onroad_layout = BodyLayout()
 

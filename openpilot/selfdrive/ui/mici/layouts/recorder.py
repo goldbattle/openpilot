@@ -1,5 +1,4 @@
 import math
-import os
 import pyray as rl
 from collections import deque
 from collections.abc import Callable
@@ -14,10 +13,6 @@ from openpilot.selfdrive.ui.mici.widgets.button import BigCircleButton, BigTileB
 from openpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
 from openpilot.selfdrive.ui.mici.onroad.driver_state import DriverStateRenderer
 
-# Must match RECORDING_FLAG in system/manager/process_config.py — the manager polls this file
-# to decide whether loggerd/encoderd/sensord run. A file (not a param) so no C++ rebuild.
-RECORDING_FLAG = "/tmp/recording"
-
 # Page order, left to right: RECORD, then the cameras. Starts on WIDE.
 CAMERAS = [
   ("WIDE",   VisionStreamType.VISION_STREAM_WIDE_ROAD, False),
@@ -31,15 +26,40 @@ DM_SIZE = 110
 GRAVITY = 9.81
 
 
+class _RecordingState:
+  """The "Recording" param gates loggerd/encoderd/sensord in process_config.recording --
+  a param is how this repo drives manager process predicates (cf. IsLiveStreaming,
+  JoystickDebugMode). Cached because several widgets read it every frame and each
+  get_bool is a file read; same idea as ui_state's PARAM_UPDATE_TIME."""
+  REFRESH_S = 0.2
+
+  def __init__(self):
+    self._params = Params()
+    self._value = False
+    self._last_read = -1.0
+
+  def get(self) -> bool:
+    now = rl.get_time()
+    if now - self._last_read > self.REFRESH_S:
+      self._value = self._params.get_bool("Recording")
+      self._last_read = now
+    return self._value
+
+  def set(self, recording: bool) -> None:
+    self._params.put_bool("Recording", recording, block=True)
+    self._value = recording  # reflect immediately so the button doesn't lag the tap
+    self._last_read = rl.get_time()
+
+
+_recording_state = _RecordingState()
+
+
 def is_recording() -> bool:
-  return os.path.exists(RECORDING_FLAG)
+  return _recording_state.get()
 
 
 def set_recording(recording: bool) -> None:
-  if recording:
-    open(RECORDING_FLAG, "w").close()
-  elif os.path.exists(RECORDING_FLAG):
-    os.remove(RECORDING_FLAG)
+  _recording_state.set(recording)
 
 
 def _magnitude(v) -> float:

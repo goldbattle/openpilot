@@ -64,13 +64,10 @@ def only_offroad(started: bool, params: Params, CP: car.CarParams) -> bool:
 def livestream(started: bool, params: Params, CP: car.CarParams) -> bool:
   return params.get_bool("IsLiveStreaming")
 
-# data-recorder fork: the record path runs off this flag file, independent of car/ignition/CAN.
-# A file (not a param) so it needs no params_keys.h entry / C++ rebuild — syncable to a device
-# with just a manager restart. Lives in /tmp so recording defaults to OFF after a reboot.
-RECORDING_FLAG = "/tmp/recording"
-
 def recording(started: bool, params: Params, CP: car.CarParams) -> bool:
-  return os.path.exists(RECORDING_FLAG)
+  # data-recorder fork: the record path runs off this param, independent of car/ignition/CAN.
+  # Same mechanism as livestream/joystick/driverview above — manager re-reads it every loop.
+  return params.get_bool("Recording")
 
 def or_(*fns):
   return lambda *args: operator.or_(*(fn(*args) for fn in fns))

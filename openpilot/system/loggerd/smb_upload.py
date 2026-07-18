@@ -6,6 +6,7 @@ disabled in this fork) but reuses its directory-ordering helper and the same
 xattr-based "is this file done" bookkeeping, under a different attribute name.
 """
 import os
+import re
 import socket
 import threading
 import time
@@ -29,6 +30,10 @@ MAX_BACKOFF = 60.0
 NO_NETWORK_POLL = 5.0
 SESSION_TIMEOUT = 8.0  # give up fast on a bad host/share instead of hanging indefinitely
 SMB_PORT = 445
+
+
+# A recorded segment dir, as built by logger.cc: "%08x--<10 hex>--<part>"
+SEGMENT_RE = re.compile(r'^[0-9a-f]{8}--[0-9a-f]{10}--\d+$')
 
 
 def route_id(segment_dirname: str) -> str:
@@ -73,6 +78,9 @@ def list_routes(root: str | None = None) -> list[Route]:
   routes: dict[str, Route] = {}
 
   for logdir in listdir_by_creation(root):
+    if not SEGMENT_RE.match(logdir):
+      continue  # not a recorded segment (log_root also holds boot/ and crash/)
+
     path = os.path.join(root, logdir)
     try:
       names = os.listdir(path)
@@ -245,8 +253,14 @@ def demo() -> None:
     make_segment("00000000--aaaaaaaaaa", 1, {"rlog.zst": b"c" * 10})
     make_segment("00000001--bbbbbbbbbb", 0, {"rlog.zst": b"d" * 20}, lock=True)  # still recording
 
+    # log_root also holds non-route dirs; these must never show up as routes
+    os.makedirs(os.path.join(root, "boot"), exist_ok=True)
+    with open(os.path.join(root, "boot", "somebootlog.zst"), 'wb') as f:
+      f.write(b"e" * 7)
+    os.makedirs(os.path.join(root, "crash"), exist_ok=True)
+
     routes = list_routes(root)
-    assert len(routes) == 1, f"expected the still-recording route to be skipped, got {routes}"
+    assert len(routes) == 1, f"expected the still-recording route + boot/crash to be skipped, got {routes}"
     assert routes[0].id == "00000000--aaaaaaaaaa"
     assert len(routes[0].files) == 3
     assert routes[0].total_size == 25
