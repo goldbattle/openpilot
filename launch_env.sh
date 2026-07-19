@@ -19,4 +19,15 @@ if [ -z "$AGNOS_VERSION" ]; then
   export AGNOS_VERSION="18.5"
 fi
 
+# recorder fork: this device is permanently installed in one car, a 2010 Camry (XV40),
+# which cannot be fingerprinted -- it predates the FW/VIN query and none of its CAN
+# addresses match a supported platform. Pin the platform here so it survives a reboot.
+# SKIP_FW_QUERY also avoids the ECU probe, which would drive the OBD multiplexer that
+# pandad holds on for passive logging. Guarded so scripts/launch_corolla.sh, which
+# exports FINGERPRINT before calling launch_openpilot.sh, still wins.
+if [ -z "$FINGERPRINT" ]; then
+  export FINGERPRINT="TOYOTA_CAMRY_XV40_2010"
+  export SKIP_FW_QUERY="1"
+fi
+
 export STAGING_ROOT="/data/safe_staging"

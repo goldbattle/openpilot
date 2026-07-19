@@ -45,7 +45,7 @@ def test_engage():
   assert next_state == LongCtrlState.pid
 
 def test_starting():
-  CP = car.CarParams.new_message(startingState=True, vEgoStarting=0.5)
+  CP = car.CarParams.new_message(deprecated={'startingState': True, 'vEgoStarting': 0.5})
   active = True
   current_state = LongCtrlState.starting
   next_state = long_control_state_trans(CP, active, current_state, v_ego=0.1,
