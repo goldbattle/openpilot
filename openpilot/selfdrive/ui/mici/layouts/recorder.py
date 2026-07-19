@@ -84,14 +84,19 @@ def set_recording(recording: bool) -> None:
   _recording_state.set(recording)
 
 
-def recording_elapsed_str() -> str:
-  """Elapsed recording time as h:mm. Hours are unbounded (no % 24) -- this is a session
-  length, so a 30h recording should read 30:00, not roll over to 6:00."""
-  secs = _recording_state.elapsed()
+def fmt_elapsed(secs: float | None) -> str:
+  """Elapsed recording time as h:mm:ss. Seconds are shown because h:mm alone reads a
+  frozen "0:00" for the first full minute, which is indistinguishable from the recorder
+  being broken -- the ticking digit is the only proof the button did anything.
+  Hours are unbounded (no % 24): this is a session length, so 30h reads 30:00:00."""
   if secs is None:
     return ""
-  total_min = int(secs) // 60
-  return f"{total_min // 60}:{total_min % 60:02d}"
+  total = int(secs)
+  return f"{total // 3600}:{(total // 60) % 60:02d}:{total % 60:02d}"
+
+
+def recording_elapsed_str() -> str:
+  return fmt_elapsed(_recording_state.elapsed())
 
 
 def _magnitude(v) -> float:

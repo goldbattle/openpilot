@@ -12,7 +12,7 @@ from openpilot.system.ui.widgets.label import gui_label, UnifiedLabel
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigInputDialog
-from openpilot.selfdrive.ui.mici.layouts.recorder import is_recording
+from openpilot.selfdrive.ui.mici.layouts.recorder import is_recording, recording_elapsed_str
 from openpilot.system.loggerd import smb_upload
 
 NetworkType = log.DeviceState.NetworkType
@@ -330,10 +330,24 @@ class RouteListPage(NavScroller):
       self._scroller.items.sort(key=lambda r: -r.route_num)
 
   def _render(self, rect: rl.Rectangle):
+    # The live route is deliberately absent from list_routes (its segments hold an .lock),
+    # so without this banner the list looks empty while you're actively recording -- which
+    # reads as "the record button did nothing".
+    banner = 0.0
+    if is_recording():
+      banner = 26.0
+      if int(rl.get_time() * 2) % 2 == 0:
+        rl.draw_circle(int(rect.x + PAD + 6), int(rect.y + 13), 5, rl.RED)
+      gui_label(rl.Rectangle(rect.x + PAD + 18, rect.y, rect.width - PAD * 2 - 18, banner),
+                f"recording  {recording_elapsed_str()}  (listed when stopped)",
+                font_size=18, font_weight=FontWeight.BOLD, color=rl.RED)
+
+    inner = rl.Rectangle(rect.x, rect.y + banner, rect.width, rect.height - banner)
     if not upload_controller.routes():
-      self._empty_label.render(rect)
+      if not is_recording():
+        self._empty_label.render(inner)
       return
-    super()._render(rect)
+    super()._render(inner)
 
 
 class SmbSettingsPage(NavScroller):

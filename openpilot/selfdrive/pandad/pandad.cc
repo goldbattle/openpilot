@@ -194,15 +194,26 @@ std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroa
     panda->set_safety_model(cereal::CarParams::SafetyModel::NO_OUTPUT);
   }
 
-  bool power_save_desired = !ignition_local;
-  if (health.power_save_enabled_pkt != power_save_desired) {
-    panda->set_power_saving(power_save_desired);
+  // recorder fork: keep the CAN transceivers powered and the OBD-II pins multiplexed onto
+  // bus 1, unconditionally, so the car's CAN is passively received and logged.
+  //
+  // Stock gates both of these on ignition, which THIS device can never observe, and the
+  // reason is circular: ignitionLine is a harness sense pin that an OBD-C cable doesn't
+  // have, so ignition could only come from ignitionCan -- but that needs CAN, CAN needs the
+  // OBD multiplexer, and stock only configures the multiplexer once already onroad, which
+  // needs ignition. Net effect on this hardware: power save never released, mux never set,
+  // `can` permanently empty. Verified by sniffing directly: mux on -> 6199 frames / 42
+  // addrs on bus 1 in 8s, mux off -> 0 frames.
+  //
+  // ELM327 is a diagnostic safety mode that cannot emit control messages, and this fork
+  // runs no controlsd (nothing publishes sendcan), so nothing is ever transmitted onto the
+  // car's bus -- this is receive-only. Param 0 = OBD multiplexing enabled, matching
+  // PandaSafety::updateMultiplexingMode().
+  if (health.power_save_enabled_pkt) {
+    panda->set_power_saving(false);
   }
-
-  // set safety mode to NO_OUTPUT when car is off or we're not onroad. ELM327 is an alternative if we want to leverage athenad/connect
-  bool should_close_relay = !ignition_local || !is_onroad;
-  if (should_close_relay && (health.safety_mode_pkt != (uint8_t)(cereal::CarParams::SafetyModel::NO_OUTPUT))) {
-    panda->set_safety_model(cereal::CarParams::SafetyModel::NO_OUTPUT);
+  if (health.safety_mode_pkt != (uint8_t)(cereal::CarParams::SafetyModel::ELM327)) {
+    panda->set_safety_model(cereal::CarParams::SafetyModel::ELM327, 0U);
   }
 
   if (!panda->comms_healthy()) {
