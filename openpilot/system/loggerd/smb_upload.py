@@ -76,6 +76,9 @@ class RouteFile:
 class Route:
   id: str
   files: list[RouteFile] = field(default_factory=list)
+  # True while loggerd still holds a lock on one of this route's segments. The completed
+  # segments are still listed (and sized) so the UI can show the route growing live.
+  recording: bool = False
 
   @property
   def total_size(self) -> int:
@@ -87,7 +90,8 @@ class Route:
 
   @property
   def is_done(self) -> bool:
-    return bool(self.files) and all(f.done for f in self.files)
+    # never "done" mid-recording: more segments are still coming
+    return bool(self.files) and not self.recording and all(f.done for f in self.files)
 
 
 def list_routes(root: str | None = None) -> list[Route]:
@@ -107,10 +111,15 @@ def list_routes(root: str | None = None) -> list[Route]:
     except OSError:
       continue
 
-    if any(name.endswith('.lock') for name in names):
-      continue  # still recording
-
     route = routes.setdefault(route_id(logdir), Route(route_id(logdir)))
+
+    if any(name.endswith('.lock') for name in names):
+      # This segment is mid-write, so none of its files are uploadable -- but the route
+      # itself is real and its earlier segments are complete, so flag it and keep going
+      # rather than dropping the whole route from the listing.
+      route.recording = True
+      continue
+
     for name in sorted(names):
       if name.endswith(PART_SUFFIX):
         continue
@@ -121,7 +130,7 @@ def list_routes(root: str | None = None) -> list[Route]:
         continue
       route.files.append(RouteFile(fn, f"{logdir}/{name}", size))
 
-  return [r for r in routes.values() if r.files]
+  return [r for r in routes.values() if r.files or r.recording]
 
 
 def _unc_path(host: str, share_path: str, rel_name: str = "") -> str:
@@ -210,7 +219,9 @@ def upload_file(host: str, share_path: str, username: str, password: str,
 
 def next_file_to_upload(routes: list[Route]) -> Iterator[tuple[Route, RouteFile]]:
   for route in routes:
-    if route.is_done:
+    # skip mid-recording routes entirely -- uploading now would push a route
+    # that's missing its tail, and it'd look complete on the share
+    if route.is_done or route.recording:
       continue
     for f in route.files:
       if not f.done:
@@ -285,11 +296,31 @@ def demo() -> None:
       f.write(b"e" * 7)
     os.makedirs(os.path.join(root, "crash"), exist_ok=True)
 
-    routes = list_routes(root)
-    assert len(routes) == 1, f"expected the still-recording route + boot/crash to be skipped, got {routes}"
-    assert routes[0].id == "00000000--aaaaaaaaaa"
-    assert len(routes[0].files) == 3
-    assert routes[0].total_size == 25
+    # a partly-recorded route: segment 0 closed, segment 1 still locked
+    make_segment("00000002--cccccccccc", 0, {"rlog.zst": b"f" * 30})
+    make_segment("00000002--cccccccccc", 1, {"rlog.zst": b"g" * 3}, lock=True)
+
+    routes = {r.id: r for r in list_routes(root)}
+    assert set(routes) == {"00000000--aaaaaaaaaa", "00000001--bbbbbbbbbb", "00000002--cccccccccc"}, \
+      f"boot/crash must be skipped but recording routes must be listed, got {sorted(routes)}"
+
+    done = routes["00000000--aaaaaaaaaa"]
+    assert not done.recording and len(done.files) == 3 and done.total_size == 25
+
+    # brand-new route: only a locked segment, so it's listed with no files yet
+    fresh = routes["00000001--bbbbbbbbbb"]
+    assert fresh.recording and fresh.files == [] and not fresh.is_done
+
+    # mid-route: closed segments are listed and sized, the locked one is withheld
+    mid = routes["00000002--cccccccccc"]
+    assert mid.recording, "must stay flagged while any segment is locked"
+    assert mid.total_size == 30, f"locked segment's bytes must be excluded, got {mid.total_size}"
+    assert not mid.is_done, "a recording route is never done, even if its closed files are uploaded"
+
+    # the uploader must never be handed a route that's still being written
+    assert all(r.id != mid.id for r, _ in next_file_to_upload(list(routes.values()))), \
+      "mid-recording route must be excluded from upload"
+
     assert route_id("00000000--aaaaaaaaaa--3") == "00000000--aaaaaaaaaa"
 
   print("smb_upload self-check OK")

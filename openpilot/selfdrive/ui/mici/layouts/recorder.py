@@ -314,15 +314,6 @@ class RecordPage(_RecorderPage):
     self._record_btn.set_position(x + bw + gap, y)
     self._record_btn.render()
 
-    # Same blinking REC + elapsed as the camera pages. The button already swaps its glyph
-    # (dot -> square) and ring colour, but that read as "nothing happened" on device, so
-    # state gets stated in words here too rather than relying on the icon alone.
-    if is_recording():
-      if int(rl.get_time() * 2) % 2 == 0:
-        rl.draw_circle(int(rect.x + PAD + 12), int(rect.y + 20), 7, rl.RED)
-      gui_label(rl.Rectangle(rect.x + PAD + 24, rect.y + 8, rect.width - PAD * 2 - 24, 24),
-                f"REC  {recording_elapsed_str()}", font_size=22, font_weight=FontWeight.BOLD, color=rl.RED)
-
 
 def make_recorder_pages() -> list[Widget]:
   """Swipeable pages: SETTINGS | RECORD | WIDE | ROAD | DRIVER (starts on WIDE)."""

@@ -12,7 +12,7 @@ from openpilot.system.ui.widgets.label import gui_label, UnifiedLabel
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigInputDialog
-from openpilot.selfdrive.ui.mici.layouts.recorder import is_recording, recording_elapsed_str
+from openpilot.selfdrive.ui.mici.layouts.recorder import is_recording
 from openpilot.system.loggerd import smb_upload
 
 NetworkType = log.DeviceState.NetworkType
@@ -125,6 +125,7 @@ class RouteRow(Widget):
     self.set_rect(rl.Rectangle(0, 0, 0, ROW_HEIGHT))
     self._progress = 0.0  # live in-flight progress (0..1), separate from route.is_done
     self._checkmark = gui_app.texture("icons/checkmark.png", 22, 22)
+    self._label_done = False
 
     # route id is "<counter>--<random>"; the counter is a monotonic route number, used
     # both in the label and to sort newest-first in RouteListPage
@@ -138,12 +139,22 @@ class RouteRow(Widget):
     # otherwise stat every file of every route on every frame.
     # NOTE: mtime, not ctime -- ctime is the inode-change time, which our own upload
     # marker (setxattr in smb_upload) bumps, so ctime would show the UPLOAD time.
+    self._rand_hex = rand_hex
+    self._label = ""
+    self._build_label(route)
+
+  def _build_label(self, route: smb_upload.Route) -> None:
+    """A route caught at its very first segment has no unlocked files yet, so there's
+    nothing to take a timestamp from. Leave the label pending and rebuild once the first
+    segment closes, rather than freezing a '--/--' placeholder for the whole route."""
     try:
       recorded_at = min(os.path.getmtime(f.path) for f in route.files)
-      time_str = time.strftime("%m/%d %H:%M:%S", time.localtime(recorded_at))
     except (OSError, ValueError):
-      time_str = "--/-- --:--:--"
-    self._label = f"#{self.route_num}  {time_str}  {rand_hex}"
+      self._label = f"#{self.route_num}  recording...  {self._rand_hex}"
+      return
+    time_str = time.strftime("%m/%d %H:%M:%S", time.localtime(recorded_at))
+    self._label = f"#{self.route_num}  {time_str}  {self._rand_hex}"
+    self._label_done = True
 
   def set_parent_rect(self, parent_rect: rl.Rectangle) -> None:
     super().set_parent_rect(parent_rect)
@@ -170,10 +181,15 @@ class RouteRow(Widget):
       rl.draw_texture_ex(self._checkmark, rl.Vector2(rect.x + rect.width - PAD - self._checkmark.width,
                                                       rect.y + (rect.height - self._checkmark.height) / 2), 0, 1.0, rl.WHITE)
     else:
-      status = f"{int(self._progress * 100)}%" if self._progress > 0 else "pending"
+      if self.route.recording:
+        status, color = "recording", rl.RED
+      elif self._progress > 0:
+        status, color = f"{int(self._progress * 100)}%", rl.Color(180, 180, 180, 255)
+      else:
+        status, color = "pending", rl.Color(180, 180, 180, 255)
       gui_label(rl.Rectangle(rect.x + rect.width * ROUTE_SIZE_FRACTION, rect.y,
                              rect.width * (1 - ROUTE_SIZE_FRACTION) - PAD, rect.height), status,
-                font_size=18, color=rl.Color(180, 180, 180, 255), alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT)
+                font_size=18, color=color, alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT)
 
 
 def should_auto_upload(uploading: bool, recording: bool, wifi_ok: bool, configured: bool,
@@ -203,7 +219,22 @@ class UploadController:
     self._progress_lock = threading.Lock()
     self._last_error: str | None = None
     self._next_auto = 0.0
-    threading.Thread(target=self._scan_worker, daemon=True).start()
+    self._scan_thread: threading.Thread | None = None
+
+  def _ensure_scanning(self) -> None:
+    """Start the scan thread lazily, from whichever process actually renders.
+
+    It must NOT be started at import time: manager preimports this module
+    (PythonProcess.prepare -> importlib.import_module) and then forks the UI child, where
+    the re-import is a no-op because the module is already in sys.modules. Threads don't
+    survive fork, so an import-time thread runs in *manager* and the UI is left holding a
+    UploadController whose route list is frozen at manager start -- it silently stops
+    listing anything recorded afterwards. Same reason ui_state starts its params and
+    brightness threads from update() with "start thread after manager forks ui".
+    Re-checks is_alive so a crashed scan thread recovers instead of freezing again."""
+    if self._scan_thread is None or not self._scan_thread.is_alive():
+      self._scan_thread = threading.Thread(target=self._scan_worker, daemon=True)
+      self._scan_thread.start()
 
   def _scan_worker(self):
     while True:
@@ -215,6 +246,7 @@ class UploadController:
 
   def update(self) -> None:
     """Called from a page's _update_state -- swaps in the latest scan on the UI thread."""
+    self._ensure_scanning()
     if self._pending_routes is not None:
       self._routes = self._pending_routes
       self._pending_routes = None
@@ -319,6 +351,8 @@ class RouteListPage(NavScroller):
         added = True
       else:
         row.route = route  # Route is rebuilt fresh each scan; swap in the latest done-state
+        if not row._label_done:
+          row._build_label(route)  # first segment has closed -> real timestamp now available
       live = upload_controller.progress_for(route.id)
       if live:
         row.set_progress(*live)
@@ -330,24 +364,12 @@ class RouteListPage(NavScroller):
       self._scroller.items.sort(key=lambda r: -r.route_num)
 
   def _render(self, rect: rl.Rectangle):
-    # The live route is deliberately absent from list_routes (its segments hold an .lock),
-    # so without this banner the list looks empty while you're actively recording -- which
-    # reads as "the record button did nothing".
-    banner = 0.0
-    if is_recording():
-      banner = 26.0
-      if int(rl.get_time() * 2) % 2 == 0:
-        rl.draw_circle(int(rect.x + PAD + 6), int(rect.y + 13), 5, rl.RED)
-      gui_label(rl.Rectangle(rect.x + PAD + 18, rect.y, rect.width - PAD * 2 - 18, banner),
-                f"recording  {recording_elapsed_str()}  (listed when stopped)",
-                font_size=18, font_weight=FontWeight.BOLD, color=rl.RED)
-
-    inner = rl.Rectangle(rect.x, rect.y + banner, rect.width, rect.height - banner)
+    # The in-progress route now appears as a normal row (flagged route.recording), so no
+    # separate banner is needed -- the list is the single source of truth.
     if not upload_controller.routes():
-      if not is_recording():
-        self._empty_label.render(inner)
+      self._empty_label.render(rect)
       return
-    super()._render(inner)
+    super()._render(rect)
 
 
 class SmbSettingsPage(NavScroller):
