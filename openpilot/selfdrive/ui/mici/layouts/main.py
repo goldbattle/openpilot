@@ -68,7 +68,9 @@ class MiciMainLayout(Scroller):
   def _setup_callbacks(self):
     for page in self._recorder_pages:
       page.set_callbacks(on_settings=lambda: gui_app.push_widget(self._settings_layout),
-                        on_upload=lambda: gui_app.push_widget(self._upload_layout))
+                        on_upload=lambda: gui_app.push_widget(self._upload_layout),
+                        # smooth=True -> the scroller animates the slide rather than jumping
+                        on_record_start=lambda: self._scroll_to(self._recorder_pages[START_PAGE]))
     for layout in (self._car_onroad_layout, self._body_onroad_layout):
       layout.set_click_callback(lambda: self._scroll_to(self._home_layout))
 

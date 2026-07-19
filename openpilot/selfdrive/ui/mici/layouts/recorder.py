@@ -161,11 +161,14 @@ class _RecorderPage(Widget):
     super().__init__()
     self._on_settings_click: Callable | None = None
     self._on_upload_click: Callable | None = None
+    self._on_record_start: Callable | None = None
 
   def set_callbacks(self, on_settings: Callable | None = None, on_upload: Callable | None = None, on_alerts: Callable | None = None,
-                    alert_count_callback: Callable | None = None, max_severity_callback: Callable | None = None):
+                    alert_count_callback: Callable | None = None, max_severity_callback: Callable | None = None,
+                    on_record_start: Callable | None = None):
     self._on_settings_click = on_settings
     self._on_upload_click = on_upload
+    self._on_record_start = on_record_start
 
   def _open_settings(self):
     if self._on_settings_click:
@@ -219,9 +222,10 @@ class CameraPage(_RecorderPage):
 
 class RecordCircleButton(BigCircleButton):
   """Circular record button: red dot = start, white square = stop. Red ring while recording."""
-  def __init__(self):
+  def __init__(self, on_start: Callable | None = None):
     # icon is drawn by _draw_content below, so pass a 1px placeholder
     super().__init__(gui_app.texture("icons_mici/settings.png", 1, 1))
+    self._on_start = on_start
 
   def _update_state(self):
     super()._update_state()
@@ -229,7 +233,13 @@ class RecordCircleButton(BigCircleButton):
 
   def _handle_mouse_release(self, mouse_pos: MousePos):
     super()._handle_mouse_release(mouse_pos)  # keeps the standard press animation/click delay
-    set_recording(not is_recording())
+    starting = not is_recording()
+    set_recording(starting)
+    # On START, slide to the WIDE camera so you immediately see what's being captured.
+    # Deliberately NOT on stop: jumping away then would hide the very state change you
+    # pressed for, and you'd have no confirmation it actually stopped.
+    if starting and self._on_start:
+      self._on_start()
 
   def _draw_content(self, btn_y: float):
     cx = int(self._rect.x + self._rect.width / 2)
@@ -285,8 +295,12 @@ class RecordPage(_RecorderPage):
     # standard widget behaviour: the buttons handle their own touches (and press animation),
     # swipe-cancellation comes from Scroller via Widget._child() propagation
     self._upload_btn = self._child(UploadCircleButton())
-    self._record_btn = self._child(RecordCircleButton())
+    self._record_btn = self._child(RecordCircleButton(on_start=self._start_recording))
     self._upload_btn.set_click_callback(self._open_upload)
+
+  def _start_recording(self):
+    if self._on_record_start:
+      self._on_record_start()
 
   def _render(self, rect: rl.Rectangle):
     rl.draw_rectangle_rec(rect, rl.Color(0, 0, 0, 255))
@@ -299,6 +313,15 @@ class RecordPage(_RecorderPage):
     self._upload_btn.render()
     self._record_btn.set_position(x + bw + gap, y)
     self._record_btn.render()
+
+    # Same blinking REC + elapsed as the camera pages. The button already swaps its glyph
+    # (dot -> square) and ring colour, but that read as "nothing happened" on device, so
+    # state gets stated in words here too rather than relying on the icon alone.
+    if is_recording():
+      if int(rl.get_time() * 2) % 2 == 0:
+        rl.draw_circle(int(rect.x + PAD + 12), int(rect.y + 20), 7, rl.RED)
+      gui_label(rl.Rectangle(rect.x + PAD + 24, rect.y + 8, rect.width - PAD * 2 - 24, 24),
+                f"REC  {recording_elapsed_str()}", font_size=22, font_weight=FontWeight.BOLD, color=rl.RED)
 
 
 def make_recorder_pages() -> list[Widget]:
