@@ -217,7 +217,15 @@ std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroa
   if (health.power_save_enabled_pkt) {
     panda->set_power_saving(false);
   }
-  if (health.safety_mode_pkt != (uint8_t)(cereal::CarParams::SafetyModel::ELM327)) {
+  // Both the mode AND the param have to be checked. PandaSafety::updateMultiplexingMode()
+  // runs on the offroad->onroad edge and sets ELM327 with param *1* -- mux off -- to do the
+  // fingerprint query. Comparing only the mode leaves that param 1 in place forever, because
+  // the mode still reads ELM327. That is self-defeating here: ignition comes from the car's
+  // CAN, so turning the mux off the instant we go onroad kills the very frames that asserted
+  // ignition, which drops us back offroad with the mux stuck off and no way to recover.
+  // (Latent until ignition actually worked -- the device never reached onroad before.)
+  if (health.safety_mode_pkt != (uint8_t)(cereal::CarParams::SafetyModel::ELM327) ||
+      health.safety_param_pkt != 0U) {
     panda->set_safety_model(cereal::CarParams::SafetyModel::ELM327, 0U);
   }
 

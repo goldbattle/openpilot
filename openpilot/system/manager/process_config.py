@@ -68,11 +68,15 @@ def recording(started: bool, params: Params, CP: car.CarParams) -> bool:
   # Same mechanism as livestream/joystick/driverview above — manager re-reads it every loop.
   return params.get_bool("Recording")
 
+# n-ary: operator.or_/and_ are strictly binary, so these used to blow up with
+# "expected 2 arguments" as soon as a third predicate was combined. The list
+# comprehensions are deliberate -- any()/all() on a generator would short-circuit and
+# skip later predicates, and some of these have side effects (ublox writes a param).
 def or_(*fns):
-  return lambda *args: operator.or_(*(fn(*args) for fn in fns))
+  return lambda *args: any([fn(*args) for fn in fns])
 
 def and_(*fns):
-  return lambda *args: operator.and_(*(fn(*args) for fn in fns))
+  return lambda *args: all([fn(*args) for fn in fns])
 
 def not_(*fns):
   return lambda *args: operator.not_(*(fn(*args) for fn in fns))
