@@ -6,6 +6,7 @@ from openpilot.selfdrive.ui.mici.layouts.settings.network.network_layout import 
 from openpilot.selfdrive.ui.mici.layouts.settings.device import DeviceLayoutMici, PairBigButton
 from openpilot.selfdrive.ui.mici.layouts.settings.developer import DeveloperLayoutMici
 from openpilot.selfdrive.ui.mici.layouts.settings.software import SoftwareLayoutMici
+from openpilot.selfdrive.ui.mici.layouts.recorder import RecorderLayout
 from openpilot.selfdrive.ui.mici.layouts.upload import SmbSettingsPage, draw_up_arrow
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 
@@ -51,11 +52,17 @@ class SettingsLayout(NavScroller):
     developer_btn = SettingsBigButton("developer", "", gui_app.texture("icons_mici/settings/developer_icon.png", 64, 60))
     developer_btn.set_click_callback(lambda: gui_app.push_widget(developer_panel))
 
-    # recorder fork: SMB server config + "upload all". The route list itself is the
-    # upload button on the record page.
+    # recorder fork: SMB server config + "upload all".
     upload_panel = SmbSettingsPage()
     upload_btn = UploadBigButton("upload", "", None)
     upload_btn.set_click_callback(lambda: gui_app.push_widget(upload_panel))
+
+    # recorder fork: manual recorder, for capturing with no key in the ignition. With the
+    # key on the device goes onroad and records the drive by itself, so this is only for
+    # the car-off case. The route list is not here -- it's under the upload panel.
+    recorder_panel = RecorderLayout()
+    recorder_btn = SettingsBigButton("record", "", gui_app.texture("icons_mici/settings/developer_icon.png", 64, 60))
+    recorder_btn.set_click_callback(lambda: gui_app.push_widget(recorder_panel))
 
     # recorder fork: firehose removed — it advertises uploading data to comma. This fork keeps
     # all data on device (uploader + athenad are disabled in process_config).
@@ -63,6 +70,7 @@ class SettingsLayout(NavScroller):
     self._scroller.add_widgets([
       toggles_btn,
       network_btn,
+      recorder_btn,
       upload_btn,
       device_btn,
       software_btn,

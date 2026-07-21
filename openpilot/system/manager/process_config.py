@@ -29,9 +29,8 @@ def ublox(started: bool, params: Params, CP: car.CarParams) -> bool:
   use_ublox = ublox_available()
   if use_ublox != params.get_bool("UbloxAvailable"):
     params.put_bool("UbloxAvailable", use_ublox, block=True)
-  # recorder fork: GPS runs whenever the device is on, so it has time to acquire a fix
-  # (a cold u-blox fix takes minutes; waiting until "record" is pressed is too late)
-  return use_ublox
+  # recorder fork: also while manually recording, so a car-off capture still gets a fix
+  return (started or recording(started, params, CP)) and use_ublox
 
 def joystick(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and params.get_bool("JoystickDebugMode")
@@ -49,8 +48,8 @@ def not_long_maneuver(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and not params.get_bool("LongitudinalManeuverMode")
 
 def qcomgps(started: bool, params: Params, CP: car.CarParams) -> bool:
-  # recorder fork: GPS runs whenever the device is on, so it has time to acquire a fix
-  return not ublox_available()
+  # recorder fork: also while manually recording, so a car-off capture still gets a fix
+  return (started or recording(started, params, CP)) and not ublox_available()
 
 def always_run(started: bool, params: Params, CP: car.CarParams) -> bool:
   return True
@@ -87,9 +86,8 @@ procs = [
   NativeProcess("stream_encoderd", "openpilot/system/loggerd", ["./encoderd", "--stream"], or_(and_(livestream, not_(iscar)), notcar)),
   PythonProcess("logmessaged", "openpilot.system.logmessaged", always_run),
 
-  # recorder fork: camerad always on so the 3-camera preview is available before/while recording
-  # ponytail: always-on camera raises idle power/heat; gate on a preview state if that matters
-  NativeProcess("camerad", "openpilot/system/camerad", ["./camerad"], always_run, enabled=not WEBCAM),
+  # recorder fork: + recording, so the manual (car-off) recorder has camera feeds to show and log
+  NativeProcess("camerad", "openpilot/system/camerad", ["./camerad"], or_(driverview, livestream, recording), enabled=not WEBCAM),
   PythonProcess("webcamerad", "openpilot.system.camerad.webcam.camerad", driverview, enabled=WEBCAM),
   PythonProcess("proclogd", "openpilot.system.proclogd", only_onroad, enabled=platform.system() != "Darwin"),
   PythonProcess("journald", "openpilot.system.journald", only_onroad, platform.system() != "Darwin"),
@@ -97,13 +95,11 @@ procs = [
   PythonProcess("timed", "openpilot.system.timed", always_run, enabled=not PC),
 
   PythonProcess("modeld", "openpilot.selfdrive.modeld.modeld", only_onroad),
-  # recorder fork: DM always on so the driver page's dmoji has live pose data (relying on the
-  # IsDriverViewEnabled param didn't work — it's CLEAR_ON_MANAGER_START and gets reset).
-  # ponytail: this keeps a NN running continuously; gate it on the driver page if power matters.
-  PythonProcess("dmonitoringmodeld", "openpilot.selfdrive.modeld.dmonitoringmodeld", always_run, enabled=(WEBCAM or not PC)),
+  # recorder fork: + recording, so the driver page's dmoji has live pose data while manually recording
+  PythonProcess("dmonitoringmodeld", "openpilot.selfdrive.modeld.dmonitoringmodeld", or_(driverview, recording), enabled=(WEBCAM or not PC)),
 
-  # recorder fork: IMU always on — logged while recording, and shown live in the UI status line
-  PythonProcess("sensord", "openpilot.system.sensord.sensord", always_run, enabled=not PC),
+  # recorder fork: + recording, so a car-off capture still logs the IMU
+  PythonProcess("sensord", "openpilot.system.sensord.sensord", or_(only_onroad, recording), enabled=not PC),
   PythonProcess("ui", "openpilot.selfdrive.ui.ui", always_run, restart_if_crash=True),
   PythonProcess("soundd", "openpilot.selfdrive.ui.soundd", driverview),
   PythonProcess("locationd", "openpilot.selfdrive.locationd.locationd", only_onroad),
@@ -115,7 +111,7 @@ procs = [
   PythonProcess("selfdrived", "openpilot.selfdrive.selfdrived.selfdrived", only_onroad),
   PythonProcess("card", "openpilot.selfdrive.car.card", only_onroad),
   PythonProcess("deleter", "openpilot.system.loggerd.deleter", always_run),
-  PythonProcess("dmonitoringd", "openpilot.selfdrive.monitoring.dmonitoringd", always_run, enabled=(WEBCAM or not PC)),
+  PythonProcess("dmonitoringd", "openpilot.selfdrive.monitoring.dmonitoringd", or_(driverview, recording), enabled=(WEBCAM or not PC)),
   PythonProcess("qcomgpsd", "openpilot.system.qcomgpsd.qcomgpsd", qcomgps, enabled=TICI),
   PythonProcess("pandad", "openpilot.selfdrive.pandad.pandad", always_run),
   PythonProcess("paramsd", "openpilot.selfdrive.locationd.paramsd", only_onroad),

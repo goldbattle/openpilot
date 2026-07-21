@@ -12,7 +12,7 @@ from openpilot.system.ui.widgets.label import gui_label, UnifiedLabel
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigInputDialog
-from openpilot.selfdrive.ui.mici.layouts.recorder import is_recording
+from openpilot.selfdrive.ui.mici.layouts.recorder import is_logging
 from openpilot.system.loggerd import smb_upload
 
 NetworkType = log.DeviceState.NetworkType
@@ -257,7 +257,10 @@ class UploadController:
     UI thread, so reading ui_state.sm (wifi_ok) doesn't race the thread that updates it."""
     self.update()
     if should_auto_upload(uploading=self.is_uploading(),
-                          recording=is_recording(),
+                          # is_logging, not is_recording: an ignition-driven drive is
+                          # appending to the live route too, and uploading then would push
+                          # a route missing its tail.
+                          recording=is_logging(),
                           wifi_ok=self.wifi_ok(),
                           configured=bool(self._params.get("SmbHost") and self._params.get("SmbSharePath")),
                           available=smb_upload.available(),
@@ -387,14 +390,19 @@ class SmbSettingsPage(NavScroller):
     self._pending_status: str | None = None
     threading.Thread(target=self._ping_worker, daemon=True).start()
 
+    # the route list lives under here rather than next to the record button: it's about
+    # what has been uploaded, not about capturing
+    self._route_list = RouteListPage()
+
     self._upload_row = _Row("upload all", upload_controller.start_upload)
+    self._routes_row = _Row("recordings", lambda: gui_app.push_widget(self._route_list))
     self._host_row = self._make_field_row("host", "SmbHost", "enter host or IP...")
     self._share_row = self._make_field_row("share path", "SmbSharePath", "enter share name...")
     self._user_row = self._make_field_row("username", "SmbUsername", "enter username, blank for guest...")
     self._pass_row = _Row("password", self._edit_password)
     self._wifi_row = _ToggleRow("Wi-Fi only", "SmbWifiOnly")
 
-    self._scroller.add_widgets([self._upload_row, self._host_row, self._share_row,
+    self._scroller.add_widgets([self._upload_row, self._routes_row, self._host_row, self._share_row,
                                 self._user_row, self._pass_row, self._wifi_row])
 
   def _ping_worker(self):

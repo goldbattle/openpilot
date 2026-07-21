@@ -9,18 +9,20 @@ from openpilot.common.params import Params
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos
 from openpilot.system.ui.widgets.label import gui_label
+from openpilot.system.ui.widgets.scroller import NavScroller
 from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.selfdrive.ui.mici.widgets.button import BigCircleButton, BigTileButton
+from openpilot.selfdrive.ui.mici.widgets.button import BigCircleButton
 from openpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
 from openpilot.selfdrive.ui.mici.onroad.driver_state import DriverStateRenderer
 
-# Page order, left to right: RECORD, then the cameras. Starts on WIDE.
+# Page order, left to right: RECORD, then the cameras.
 CAMERAS = [
   ("WIDE",   VisionStreamType.VISION_STREAM_WIDE_ROAD, False),
   ("ROAD",   VisionStreamType.VISION_STREAM_ROAD,      False),
   ("DRIVER", VisionStreamType.VISION_STREAM_DRIVER,    True),   # True -> driver monitoring overlay
 ]
-START_PAGE = 2  # WIDE (pages are now SETTINGS, RECORD, then the cameras)
+RECORD_PAGE = 0
+WIDE_PAGE = 1
 
 PAD = 8
 DM_SIZE = 76
@@ -42,12 +44,12 @@ class _RecordingState:
     # which would make the elapsed counter leap or go negative mid-recording.
     self._started_at: float | None = None
 
-  def _mark(self, recording: bool) -> None:
+  def mark(self, logging: bool) -> None:
     """Start the clock on a False->True edge; leave it running otherwise so a repeated
     True (every poll) doesn't keep resetting elapsed to zero."""
-    if recording and self._started_at is None:
+    if logging and self._started_at is None:
       self._started_at = time.monotonic()
-    elif not recording:
+    elif not logging:
       self._started_at = None
 
   def get(self) -> bool:
@@ -55,8 +57,6 @@ class _RecordingState:
     if now - self._last_read > self.REFRESH_S:
       self._value = self._params.get_bool("Recording")
       self._last_read = now
-      # catches edges from outside the UI too (manager clears it, or a CLI param write)
-      self._mark(self._value)
     return self._value
 
   def elapsed(self) -> float | None:
@@ -70,14 +70,26 @@ class _RecordingState:
     self._params.put_bool("Recording", recording, block=True)
     self._value = recording  # reflect immediately so the button doesn't lag the tap
     self._last_read = rl.get_time()
-    self._mark(recording)
+    self.mark(recording)
 
 
 _recording_state = _RecordingState()
 
 
 def is_recording() -> bool:
+  """The manual record toggle -- the "Recording" param this UI owns."""
   return _recording_state.get()
+
+
+def is_logging() -> bool:
+  """True whenever loggerd is actually writing segments, which is what the REC indicator
+  has to reflect. Two independent paths start it (see process_config): the manual param,
+  and simply being onroad -- with the key on, `logging` is true and the drive is captured
+  whether or not anyone pressed record. Showing only the param made the UI claim it wasn't
+  recording during every ignition-driven drive."""
+  logging = is_recording() or ui_state.started
+  _recording_state.mark(logging)
+  return logging
 
 
 def set_recording(recording: bool) -> None:
@@ -154,32 +166,11 @@ def sensor_status() -> str:
   return "   ".join(parts)
 
 
-class _RecorderPage(Widget):
-  """Common: settings callback. Swipe-vs-tap is handled centrally — Scroller marks its items
-  touch-invalid while scrolling and Widget._child() propagates that to nested widgets."""
-  def __init__(self):
-    super().__init__()
-    self._on_settings_click: Callable | None = None
-    self._on_upload_click: Callable | None = None
-    self._on_record_start: Callable | None = None
-
-  def set_callbacks(self, on_settings: Callable | None = None, on_upload: Callable | None = None, on_alerts: Callable | None = None,
-                    alert_count_callback: Callable | None = None, max_severity_callback: Callable | None = None,
-                    on_record_start: Callable | None = None):
-    self._on_settings_click = on_settings
-    self._on_upload_click = on_upload
-    self._on_record_start = on_record_start
-
-  def _open_settings(self):
-    if self._on_settings_click:
-      self._on_settings_click()
-
-  def _open_upload(self):
-    if self._on_upload_click:
-      self._on_upload_click()
+# Swipe-vs-tap on these pages is handled centrally: Scroller marks its items touch-invalid
+# while scrolling and Widget._child() propagates that down to nested widgets.
 
 
-class CameraPage(_RecorderPage):
+class CameraPage(Widget):
   """One full-screen camera stream. Swipe left/right (the Scroller) changes page."""
   def __init__(self, name: str, stream: VisionStreamType, driver_overlay: bool = False):
     super().__init__()
@@ -213,7 +204,7 @@ class CameraPage(_RecorderPage):
               f"{self._name}   {sensor_status()}",
               font_size=22, font_weight=FontWeight.BOLD, color=rl.Color(255, 255, 255, 235))
 
-    if is_recording():  # blinking REC while recording
+    if is_logging():  # blinking REC whenever segments are being written
       if int(rl.get_time() * 2) % 2 == 0:
         rl.draw_circle(int(rect.x + PAD + 12), int(rect.y + 40), 7, rl.RED)
       gui_label(rl.Rectangle(rect.x + PAD + 24, rect.y + 28, 180, 24), f"REC  {recording_elapsed_str()}",
@@ -229,10 +220,14 @@ class RecordCircleButton(BigCircleButton):
 
   def _update_state(self):
     super()._update_state()
-    self._red = is_recording()  # BigCircleButton picks the red background from this
+    self._red = is_logging()  # BigCircleButton picks the red background from this
 
   def _handle_mouse_release(self, mouse_pos: MousePos):
     super()._handle_mouse_release(mouse_pos)  # keeps the standard press animation/click delay
+    if ui_state.started:
+      # Onroad the drive is being logged off ignition, and clearing the param wouldn't stop
+      # loggerd. Ignore the press rather than let the button claim a stop it can't perform.
+      return
     starting = not is_recording()
     set_recording(starting)
     # On START, slide to the WIDE camera so you immediately see what's being captured.
@@ -244,98 +239,72 @@ class RecordCircleButton(BigCircleButton):
   def _draw_content(self, btn_y: float):
     cx = int(self._rect.x + self._rect.width / 2)
     cy = int(btn_y + self._rect.height / 2)
-    if is_recording():
+    if is_logging():
       s = 46  # square = stop
       rl.draw_rectangle(cx - s // 2, cy - s // 2, s, s, rl.WHITE)
     else:
       rl.draw_circle(cx, cy, 34, rl.RED)  # dot = record
 
 
-class UploadCircleButton(BigCircleButton):
-  """Circular upload button: hand-drawn upward arrow (not a Wi-Fi glyph -- this
-  button opens the upload flow, it doesn't indicate Wi-Fi state)."""
-  def __init__(self):
-    # icon is drawn by _draw_content below, so pass a 1px placeholder
-    super().__init__(gui_app.texture("icons_mici/settings.png", 1, 1))
-
-  def _draw_content(self, btn_y: float):
-    cx = self._rect.x + self._rect.width / 2
-    cy = btn_y + self._rect.height / 2
-    s = 64
-    head_h = s * 0.45
-    shaft_w = s * 0.28
-    top = cy - s / 2
-    rl.draw_triangle(rl.Vector2(cx, top), rl.Vector2(cx - s / 2, top + head_h), rl.Vector2(cx + s / 2, top + head_h), rl.WHITE)
-    rl.draw_rectangle(int(cx - shaft_w / 2), int(top + head_h), int(shaft_w), int(s * 0.55), rl.WHITE)
-
-
-class SettingsPage(_RecorderPage):
-  """Its own page (swipe further left of RecordPage) -- the screen is only 536x240,
-  too narrow to fit settings + upload + record side by side (see RecordPage). A big
-  tile fills the page: same button background/press animation as everywhere else,
-  just sized to the whole screen instead of BigButton's fixed 402x180."""
-  MARGIN = 20
-
-  def __init__(self):
-    super().__init__()
-    icon = gui_app.texture("icons_mici/settings.png", 64, 64)
-    self._btn = self._child(BigTileButton(gui_app.width - self.MARGIN * 2, gui_app.height - self.MARGIN * 2, "settings", icon))
-    self._btn.set_click_callback(self._open_settings)
-
-  def _render(self, rect: rl.Rectangle):
-    rl.draw_rectangle_rec(rect, rl.Color(0, 0, 0, 255))
-    self._btn.set_position(rect.x + self.MARGIN, rect.y + self.MARGIN)
-    self._btn.render()
-
-
-class RecordPage(_RecorderPage):
-  """Upload (left) and record (right) buttons -- only 2 fit on this 536-wide screen."""
-  def __init__(self):
+class RecordPage(Widget):
+  """Back-to-settings (left) and record (right) buttons -- only 2 fit on this 536-wide
+  screen. The route list is not here: it lives under the upload panel in settings, since
+  it's about what has been uploaded rather than about capturing."""
+  def __init__(self, on_settings: Callable | None = None, on_record_start: Callable | None = None):
     super().__init__()
     # standard widget behaviour: the buttons handle their own touches (and press animation),
     # swipe-cancellation comes from Scroller via Widget._child() propagation
-    self._upload_btn = self._child(UploadCircleButton())
-    self._record_btn = self._child(RecordCircleButton(on_start=self._start_recording))
-    self._upload_btn.set_click_callback(self._open_upload)
-
-  def _start_recording(self):
-    if self._on_record_start:
-      self._on_record_start()
+    self._settings_btn = self._child(BigCircleButton(gui_app.texture("icons_mici/settings.png", 64, 64)))
+    self._record_btn = self._child(RecordCircleButton(on_start=on_record_start))
+    if on_settings is not None:
+      self._settings_btn.set_click_callback(on_settings)
 
   def _render(self, rect: rl.Rectangle):
     rl.draw_rectangle_rec(rect, rl.Color(0, 0, 0, 255))
 
-    bw = self._upload_btn.rect.width          # circular buttons are 180x180
+    bw = self._settings_btn.rect.width          # circular buttons are 180x180
     gap = 48
     x = rect.x + (rect.width - (bw * 2 + gap)) / 2
-    y = rect.y + (rect.height - self._upload_btn.rect.height) / 2
-    self._upload_btn.set_position(x, y)
-    self._upload_btn.render()
+    y = rect.y + (rect.height - self._settings_btn.rect.height) / 2
+    self._settings_btn.set_position(x, y)
+    self._settings_btn.render()
     self._record_btn.set_position(x + bw + gap, y)
     self._record_btn.render()
 
 
-def make_recorder_pages() -> list[Widget]:
-  """Swipeable pages: SETTINGS | RECORD | WIDE | ROAD | DRIVER (starts on WIDE)."""
-  params = Params()
-  # record the driver camera too — loggerd reads this at startup to enable the dcamera encoder,
-  # otherwise segments only contain fcamera (road) + ecamera (wide).
-  params.put_bool("RecordFront", True)
-  # note: DM procs are always_run in process_config (not gated on IsDriverViewEnabled, which
-  # is CLEAR_ON_MANAGER_START and gets reset out from under us). dmonitoringd forces its
-  # car-less demo path in this fork -- see the comment there.
-  return [SettingsPage(), RecordPage()] + [CameraPage(n, s, dm) for n, s, dm in CAMERAS]
+class RecorderLayout(NavScroller):
+  """recorder fork: the manual recorder, reached from settings like any other panel.
+  Horizontal pages: RECORD (settings + record buttons), then the WIDE / ROAD / DRIVER feeds.
+  Swipe down to go back, same as every other settings panel.
 
+  This is a *manual* recorder for use with no key in the ignition. With the key on, the
+  device goes onroad and loggerd records the drive on its own -- nothing here is needed."""
+  def __init__(self):
+    super().__init__(snap_items=True, spacing=0, pad=0, scroll_indicator=False, edge_shadows=False)
 
-if __name__ == "__main__":
-  # smoke test: left/right arrow keys page through, record toggle writes the flag file
-  gui_app.init_window("recorder")
-  pages = make_recorder_pages()
-  idx = START_PAGE
-  for _ in gui_app.render():
-    ui_state.update()
-    if rl.is_key_pressed(rl.KeyboardKey.KEY_RIGHT):
-      idx = (idx + 1) % len(pages)
-    if rl.is_key_pressed(rl.KeyboardKey.KEY_LEFT):
-      idx = (idx - 1) % len(pages)
-    pages[idx].render(rl.Rectangle(0, 0, gui_app.width, gui_app.height))
+    # record the driver camera too — loggerd reads this at startup to enable the dcamera
+    # encoder, otherwise segments only contain fcamera (road) + ecamera (wide).
+    Params().put_bool("RecordFront", True)
+
+    self._pages: list[Widget] = [RecordPage(on_settings=self.dismiss, on_record_start=self._show_wide)]
+    self._pages += [CameraPage(n, s, dm) for n, s, dm in CAMERAS]
+    for page in self._pages:
+      page.set_rect(rl.Rectangle(0, 0, gui_app.width, gui_app.height))
+
+    self._scroller.add_widgets(self._pages)
+    self._scroller.set_reset_scroll_at_show(False)
+
+  def _page_x(self, index: int) -> int:
+    # pages are full-width with spacing=0, so page N starts exactly N screens along.
+    # Computed rather than read off page.rect.x, which isn't laid out until first render.
+    return int(self._rect.width * index)
+
+  def _show_wide(self):
+    # On START, slide to the WIDE camera so you immediately see what's being captured.
+    self._scroller.scroll_to(self._page_x(WIDE_PAGE), smooth=True)
+
+  def show_event(self):
+    super().show_event()
+    # Always open on the record button rather than wherever the last visit left off --
+    # you came here from settings to start or stop a recording.
+    self._scroller.scroll_to(self._page_x(RECORD_PAGE))
