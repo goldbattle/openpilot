@@ -86,54 +86,11 @@ void can_send_thread(Panda *panda, bool fake_send) {
   }
 }
 
-// recorder fork: ignition decoded from the car's own CAN, on the SoC.
-//
-// Upstream decides ignition in panda firmware (opendbc/safety/ignition.h, called from
-// board/drivers/fdcan.h in the CAN RX ISR) with a hardcoded case per car: GM 0x1F1,
-// Tesla 0x221, Mazda 0x9E, and so on. Two reasons that path is unusable here: it only
-// looks at bus 0, but OBD-II multiplexing puts this car's bus on 1, and changing it at
-// all means rebuilding and reflashing the MCU. pandad already sees every frame in
-// can_recv(), so the same decode lives here instead -- same idea, reachable layer.
-namespace {
-
-// 2010 Camry (XV40) BODY_CONTROL_STATE. KEY_ON is DBC start bit 37, big-endian, 1 bit,
-// which is byte 4 bit 5. Set only in RUN/START and clear in ACCESSORY and OFF, matched
-// against 17/17 narrated key positions. See toyota_camry_xv40_2010_pt.dbc.
-constexpr long KEY_STATE_ADDR = 0x620;
-constexpr long KEY_STATE_BUS = 1;  // OBD-II pins are multiplexed onto bus 1, not bus 0
-constexpr int KEY_STATE_BYTE = 4;
-constexpr int KEY_STATE_BIT = 5;
-
-// 0x620 is broadcast even with the ignition off and the key removed, so silence means the
-// bus is asleep or the cable is out -- not that the car was switched off. The message's
-// period was never measured, so this is the tuning knob: too tight and a slow message
-// flaps ignition, too loose and shutdown is delayed by that much.
-constexpr double KEY_STATE_TIMEOUT = 3.0;
-
-bool key_on = false;
-double key_on_last_rx = 0.0;
-
-void update_ignition_from_can(const std::vector<can_frame> &frames) {
-  for (const auto &f : frames) {
-    if (f.src == KEY_STATE_BUS && f.address == KEY_STATE_ADDR && f.dat.size() > KEY_STATE_BYTE) {
-      key_on = (((uint8_t)f.dat[KEY_STATE_BYTE] >> KEY_STATE_BIT) & 1U) != 0U;
-      key_on_last_rx = seconds_since_boot();
-    }
-  }
-}
-
-bool can_ignition() {
-  return key_on && (seconds_since_boot() - key_on_last_rx) < KEY_STATE_TIMEOUT;
-}
-
-}  // namespace
-
 void can_recv(Panda *panda, PubMaster *pm) {
   static std::vector<can_frame> raw_can_data;
   {
     raw_can_data.clear();
     bool comms_healthy = panda->can_receive(raw_can_data);
-    update_ignition_from_can(raw_can_data);
 
     MessageBuilder msg;
     auto evt = msg.initEvent();
@@ -230,10 +187,7 @@ std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroa
     health.ignition_line_pkt = 1;
   }
 
-  // KEY_ON off the car's CAN is the only ignition source this hardware has: ignition_line
-  // is a harness sense pin an OBD-C cable does not have, and the firmware's ignition_can
-  // has no case for this car (and would not see bus 1 anyway).
-  bool ignition_local = ((health.ignition_line_pkt != 0) || (health.ignition_can_pkt != 0) || can_ignition());
+  bool ignition_local = ((health.ignition_line_pkt != 0) || (health.ignition_can_pkt != 0));
 
   // Make sure CAN buses are live: safety_setter_thread does not work if Panda CAN are silent and there is only one other CAN node
   if (health.safety_mode_pkt == (uint8_t)(cereal::CarParams::SafetyModel::SILENT)) {
@@ -251,10 +205,10 @@ std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroa
   // Verified by sniffing directly: mux on -> 6199 frames / 42 addrs on bus 1 in 8s, mux
   // off -> 0 frames.
   //
-  // update_ignition_from_can() above now breaks the loop by deriving ignition from KEY_ON
-  // on the car's bus, but that is downstream of this: the mux has to be on before any
-  // frame arrives to decode. So this stays unconditional -- gating it on ignition would
-  // re-close the loop and ignition would never assert.
+  // The panda's ignition_can_hook breaks the loop by decoding KEY_ON off this car's bus
+  // (opendbc/safety/ignition.h, XV40 case), but that is downstream of this: the mux has to
+  // be on before any frame reaches the hook. So this stays unconditional -- gating it on
+  // ignition would re-close the loop and ignition would never assert.
   //
   // ELM327 is a diagnostic safety mode that cannot emit control messages, and this fork
   // runs no controlsd (nothing publishes sendcan), so nothing is ever transmitted onto the
@@ -273,12 +227,6 @@ std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroa
 
   auto ps = pss[0];
   fill_panda_state(ps, panda->hw_type, health);
-
-  // fill_panda_state() copies ignitionCan straight from the health packet, which is always
-  // 0 on this car. hardwared gates onroad on the *published* pandaStates field
-  // (ignitionLine || ignitionCan), not on the ignition_local returned below, so the CAN
-  // decode has to be written back here or onroad never starts.
-  ps.setIgnitionCan(ps.getIgnitionCan() || can_ignition());
 
   auto cs = std::array{ps.initCanState0(), ps.initCanState1(), ps.initCanState2()};
   for (uint32_t j = 0; j < PANDA_CAN_CNT; j++) {
