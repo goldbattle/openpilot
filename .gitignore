@@ -91,7 +91,11 @@ build/
 !.vscode/*.code-snippets
 
 # agents
-.claude/
+# recorder fork: .claude/* rather than .claude/, so the checked-in skills below survive.
+# Git cannot re-include anything under an excluded DIRECTORY, so the parent has to be
+# excluded by glob for the negation to work at all.
+.claude/*
+!.claude/skills/
 .context/
 PLAN.md
 TASK.md
