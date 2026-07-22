@@ -135,15 +135,22 @@ class SelfdriveD:
     if not car_recognized:
       self.startup_event = EventName.startupNoCar
     elif car_recognized and self.CP.passive:
-      self.startup_event = EventName.startupNoControl
+      # recorder fork: no "Dashcam mode" startup alert. Passive is this fork's *normal*
+      # operating state -- the ported cars are all dashcamOnly and there is no control code
+      # to miss -- so announcing it every ignition is noise. An unrecognized car is still a
+      # real problem and still warns (startupNoCar / carUnrecognized below).
+      self.startup_event = None
     elif self.CP.secOcRequired and not self.CP.secOcKeyAvailable:
       self.startup_event = EventName.startupNoSecOcKey
 
     if not car_recognized:
       self.events.add(EventName.carUnrecognized, static=True)
       set_offroad_alert("Offroad_CarUnrecognized", True)
-    elif self.CP.passive:
-      self.events.add(EventName.dashcamMode, static=True)
+    # recorder fork: upstream's `elif self.CP.passive: events.add(dashcamMode, static=True)`
+    # is deliberately gone. That static event renders a permanent banner over the road view
+    # for the whole drive, which is exactly the view we want unobstructed. Dropping the event
+    # only removes the banner -- `if self.CP.passive: return` in update_events() below still
+    # blocks every engagement event, so nothing becomes engageable.
 
   def update_events(self, CS):
     """Compute onroadEvents from carState"""

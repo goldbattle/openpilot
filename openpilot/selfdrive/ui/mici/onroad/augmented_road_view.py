@@ -11,13 +11,11 @@ from openpilot.selfdrive.ui.mici.onroad.hud_renderer import HudRenderer
 from openpilot.selfdrive.ui.mici.onroad.model_renderer import ModelRenderer
 from openpilot.selfdrive.ui.mici.onroad.confidence_ball import ConfidenceBall
 from openpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
-from openpilot.system.ui.lib.application import FontWeight, gui_app, MousePos, MouseEvent
+from openpilot.selfdrive.ui.mici.onroad import status_line
+from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.widgets.label import UnifiedLabel
-from openpilot.system.ui.widgets import Widget
-from openpilot.common.filter_simple import BounceFilter
 from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraConfig, view_frame_from_device_frame
 from openpilot.common.transformations.orientation import rot_from_euler
-from enum import IntEnum
 
 OpState = log.SelfdriveState.OpenpilotState
 CALIBRATED = log.LiveCalibrationData.Status.calibrated
@@ -26,113 +24,15 @@ WIDE_CAM = VisionStreamType.VISION_STREAM_WIDE_ROAD
 DEFAULT_DEVICE_CAMERA = DEVICE_CAMERAS["tici", "ar0231"]
 
 
-class BookmarkState(IntEnum):
-  HIDDEN = 0
-  DRAGGING = 1
-  TRIGGERED = 2
-
 WIDE_CAM_MAX_SPEED = 5.0  # m/s (10 mph)
 ROAD_CAM_MIN_SPEED = 10  # m/s (25 mph)
 
 CAM_Y_OFFSET = 20
 
 
-class BookmarkIcon(Widget):
-  PEEK_THRESHOLD = 50  # If icon peeks out this much, snap it fully visible
-  FULL_VISIBLE_OFFSET = 200  # How far onscreen when fully visible
-  HIDDEN_OFFSET = -50  # How far offscreen when hidden
-
-  def __init__(self, bookmark_callback):
-    super().__init__()
-    self._bookmark_callback = bookmark_callback
-    self._icon = gui_app.texture("icons_mici/onroad/bookmark.png", 180, 180)
-    self._offset_filter = BounceFilter(0.0, 0.1, 1 / gui_app.target_fps)
-
-    # State
-    self._interacting = False
-    self._state = BookmarkState.HIDDEN
-    self._swipe_start_x = 0.0
-    self._swipe_current_x = 0.0
-    self._is_swiping = False
-    self._is_swiping_left: bool = False
-    self._triggered_time: float = 0.0
-
-  def is_swiping_left(self) -> bool:
-    """Check if currently swiping left (for scroller to disable)."""
-    return self._is_swiping_left
-
-  def interacting(self):
-    interacting, self._interacting = self._interacting, False
-    return interacting
-
-  def _update_state(self):
-    if self._state == BookmarkState.DRAGGING:
-      # Allow pulling past activated position with rubber band effect
-      swipe_offset = self._swipe_start_x - self._swipe_current_x
-      swipe_offset = min(swipe_offset, self.FULL_VISIBLE_OFFSET + 50)
-      self._offset_filter.update(swipe_offset)
-
-    elif self._state == BookmarkState.TRIGGERED:
-      # Continue animating to fully visible
-      self._offset_filter.update(self.FULL_VISIBLE_OFFSET)
-      # Stay in TRIGGERED state for 1 second
-      if rl.get_time() - self._triggered_time >= 1.5:
-        self._state = BookmarkState.HIDDEN
-
-    elif self._state == BookmarkState.HIDDEN:
-      self._offset_filter.update(self.HIDDEN_OFFSET)
-
-      if self._offset_filter.x < 1e-3:
-        self._interacting = False
-
-  def _handle_mouse_event(self, mouse_event: MouseEvent):
-    if not ui_state.started:
-      return
-
-    if mouse_event.left_pressed:
-      # Store relative position within widget
-      self._swipe_start_x = mouse_event.pos.x
-      self._swipe_current_x = mouse_event.pos.x
-      self._is_swiping = True
-      self._is_swiping_left = False
-      self._state = BookmarkState.DRAGGING
-
-    elif mouse_event.left_down and self._is_swiping:
-      self._swipe_current_x = mouse_event.pos.x
-      swipe_offset = self._swipe_start_x - self._swipe_current_x
-      self._is_swiping_left = swipe_offset > 0
-      if self._is_swiping_left:
-        self._interacting = True
-
-    elif mouse_event.left_released:
-      if self._is_swiping:
-        swipe_distance = self._swipe_start_x - self._swipe_current_x
-
-        # If peeking past threshold, transition to animating to fully visible and bookmark
-        if swipe_distance > self.PEEK_THRESHOLD:
-          self._state = BookmarkState.TRIGGERED
-          self._triggered_time = rl.get_time()
-          self._bookmark_callback()
-        else:
-          # Otherwise, transition back to hidden
-          self._state = BookmarkState.HIDDEN
-
-        # Reset swipe state
-        self._is_swiping = False
-        self._is_swiping_left = False
-
-  def _render(self, _):
-    """Render the bookmark icon."""
-    if self._offset_filter.x > 0:
-      icon_x = self.rect.x + self.rect.width - round(self._offset_filter.x)
-      icon_y = self.rect.y + (self.rect.height - self._icon.height) / 2  # Vertically centered
-      rl.draw_texture_ex(self._icon, rl.Vector2(icon_x, icon_y), 0.0, 1.0, rl.WHITE)
-
-
 class AugmentedRoadView(CameraView):
-  def __init__(self, bookmark_callback=None, stream_type: VisionStreamType = VisionStreamType.VISION_STREAM_ROAD):
+  def __init__(self, stream_type: VisionStreamType = VisionStreamType.VISION_STREAM_ROAD):
     super().__init__("camerad", stream_type)
-    self._bookmark_callback = bookmark_callback
     self._set_placeholder_color(rl.BLACK)
 
     self.device_camera: DeviceCameraConfig | None = None
@@ -143,9 +43,6 @@ class AugmentedRoadView(CameraView):
     self._cached_matrix: np.ndarray | None = None
     self._content_rect = rl.Rectangle()
     self._last_click_time = 0.0
-
-    # Bookmark icon with swipe gesture
-    self._bookmark_icon = BookmarkIcon(bookmark_callback)
 
     self._model_renderer = ModelRenderer()
     self._hud_renderer = HudRenderer()
@@ -159,10 +56,6 @@ class AugmentedRoadView(CameraView):
 
     self._fade_texture = gui_app.texture("icons_mici/onroad/onroad_fade.png")
 
-  def is_swiping_left(self) -> bool:
-    """Check if currently swiping left (for scroller to disable)."""
-    return self._bookmark_icon.is_swiping_left()
-
   def _update_state(self):
     super()._update_state()
 
@@ -173,11 +66,6 @@ class AugmentedRoadView(CameraView):
       self._offroad_label.set_text("openpilot can't start\ncheck alerts")
     else:
       self._offroad_label.set_text("start the car to\nuse openpilot")
-
-  def _handle_mouse_release(self, mouse_pos: MousePos):
-    # Don't trigger click callback if bookmark was triggered
-    if not self._bookmark_icon.interacting():
-      super()._handle_mouse_release(mouse_pos)
 
   def _render(self, _):
     # Draw text if not onroad
@@ -232,6 +120,9 @@ class AugmentedRoadView(CameraView):
     self._alert_renderer.render(self._content_rect)
     self._hud_renderer.render(self._content_rect)
 
+    # recorder fork: capture status, same line as the driver view
+    status_line.render(self._content_rect)
+
     # Draw fake rounded border
     rl.draw_rectangle_rounded_lines_ex(self._content_rect, 0.2 * 1.02, 10, 50, rl.BLACK)
 
@@ -242,10 +133,12 @@ class AugmentedRoadView(CameraView):
     # Use self._content_rect for positioning within camera bounds
     self._confidence_ball.render(self.rect)
 
-    self._bookmark_icon.render(self.rect)
-
   def _switch_stream_if_needed(self, sm):
-    if sm['selfdriveState'].experimentalMode and WIDE_CAM in self.available_streams:
+    # recorder fork: dropped upstream's `selfdriveState.experimentalMode and` gate. That tied
+    # the low-speed wide view to a mode you can only enable with longitudinal control, which
+    # a dashcamOnly car never has -- so the wide camera was unreachable here. Nothing about
+    # picking which recorded stream to *look at* depends on being able to drive the car.
+    if WIDE_CAM in self.available_streams:
       v_ego = sm['carState'].vEgo
       if v_ego < WIDE_CAM_MAX_SPEED:
         target = WIDE_CAM
@@ -353,7 +246,7 @@ class AugmentedRoadView(CameraView):
 
 if __name__ == "__main__":
   gui_app.init_window("OnRoad Camera View")
-  road_camera_view = AugmentedRoadView(lambda: None, stream_type=ROAD_CAM)
+  road_camera_view = AugmentedRoadView(stream_type=ROAD_CAM)
   print("***press space to switch camera view***")
   try:
     for _ in gui_app.render():

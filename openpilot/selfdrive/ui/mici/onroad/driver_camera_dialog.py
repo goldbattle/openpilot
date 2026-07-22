@@ -3,6 +3,7 @@ from openpilot.cereal import log, messaging
 from msgq.visionipc import VisionStreamType
 from openpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
 from openpilot.selfdrive.ui.mici.onroad.driver_state import DriverStateRenderer
+from openpilot.selfdrive.ui.mici.onroad import status_line
 from openpilot.selfdrive.ui.ui_state import ui_state, device
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
@@ -227,6 +228,35 @@ class BaseDriverCameraDialog(Widget):
     glasses_pos = rl.Vector2(glasses_x, glasses_y)
     glasses_prob = driver_data.sunglassesProb
     rl.draw_texture_v(self._glasses_texture, glasses_pos, rl.Color(70, 80, 161, int(255 * glasses_prob)))
+
+
+class OnroadDriverView(BaseDriverCameraDialog):
+  """recorder fork: the driver camera as a page of the main onroad scroller, one swipe right
+  of the road view. Same face box / eye + sunglasses icons / awareness readout as the settings
+  preview, plus the shared capture status line.
+
+  Everything is laid out exactly as the settings preview, dmoji included.
+
+  Deliberately does NOT inherit the base's show/hide behaviour. This page is a permanent
+  member of the scroller, so its show_event fires whenever the onroad view is scrolled to,
+  and the base would then (a) latch IsDriverViewEnabled, which is a manager predicate meant
+  for the offroad preview, and (b) start publishing selfdriveState -- a socket selfdrived
+  already owns while onroad, which would have the alert renderer reading our stub messages.
+  Leaving _pm as None makes _publish_alert_sound a no-op, so DM sounds come from soundd as
+  usual."""
+
+  def show_event(self):
+    Widget.show_event(self)  # skip BaseDriverCameraDialog's param + PubMaster setup
+
+  def hide_event(self):
+    Widget.hide_event(self)
+
+  def _render(self, rect: rl.Rectangle):
+    if not ui_state.started:
+      rl.draw_rectangle_rec(rect, rl.BLACK)
+      return
+    super()._render(rect)
+    status_line.render(rect)
 
 
 class DriverCameraDialog(NavWidget, BaseDriverCameraDialog):

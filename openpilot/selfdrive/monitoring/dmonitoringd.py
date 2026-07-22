@@ -13,12 +13,7 @@ def dmonitoringd_thread():
   sm = messaging.SubMaster(['driverStateV2', 'liveCalibration', 'carState', 'selfdriveState', 'modelV2'], poll='driverStateV2')
 
   DM = DriverMonitoring(rhd_saved=params.get_bool("IsRhdDetected"), always_on=params.get_bool("AlwaysOnDM"))
-  # recorder fork: + Recording. The manual recorder runs with no car, so carState/modelV2/
-  # liveCalibration/selfdriveState (all only_onroad) are never alive and all_checks() below
-  # can't pass -- we'd publish an all-defaults driverMonitoringState (faceDetected=False)
-  # and the UI's dmoji would never track a face. Onroad this is False as upstream, so real
-  # drives get the normal car-aware path.
-  demo_mode = params.get_bool("IsDriverViewEnabled") or params.get_bool("Recording")
+  demo_mode = params.get_bool("IsDriverViewEnabled")
 
   # 20Hz <- dmonitoringmodeld
   while True:
@@ -40,7 +35,7 @@ def dmonitoringd_thread():
     # load live always-on toggle
     if sm['driverStateV2'].frameId % 40 == 1:
       DM.always_on = params.get_bool("AlwaysOnDM")
-      demo_mode = params.get_bool("IsDriverViewEnabled") or params.get_bool("Recording")
+      demo_mode = params.get_bool("IsDriverViewEnabled")
 
     # save rhd virtual toggle every 5 mins
     if (sm['driverStateV2'].frameId % 6000 == 0 and not demo_mode and

@@ -12,7 +12,6 @@ from openpilot.system.ui.widgets.label import gui_label, UnifiedLabel
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigInputDialog
-from openpilot.selfdrive.ui.mici.layouts.recorder import is_logging
 from openpilot.system.loggerd import smb_upload
 
 NetworkType = log.DeviceState.NetworkType
@@ -192,16 +191,17 @@ class RouteRow(Widget):
                 font_size=18, color=color, alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT)
 
 
-def should_auto_upload(uploading: bool, recording: bool, wifi_ok: bool, configured: bool,
+def should_auto_upload(uploading: bool, onroad: bool, wifi_ok: bool, configured: bool,
                        available: bool, has_pending: bool, now: float, next_attempt: float) -> bool:
   """Pure predicate so the gating is testable without a device (see _self_check).
 
-  `recording` is the one that isn't just bookkeeping: loggerd is still appending segments
-  to the live route, so uploading mid-recording would push a route that's missing its tail.
-  list_routes already skips the segment holding an .lock, but that only protects the file
-  being written -- the *route* is still incomplete until recording stops."""
+  `onroad` is the one that isn't just bookkeeping: upload only offroad. Onroad, loggerd is
+  still appending segments to the live route, so uploading would push a route missing its
+  tail -- list_routes skips the segment holding a .lock, but that only protects the file
+  being written, not the incomplete route. Staying offroad-only also keeps the upload off
+  the CPU and the radio while the models are running."""
   return (available and configured and wifi_ok and has_pending
-          and not uploading and not recording and now >= next_attempt)
+          and not uploading and not onroad and now >= next_attempt)
 
 
 class UploadController:
@@ -257,10 +257,7 @@ class UploadController:
     UI thread, so reading ui_state.sm (wifi_ok) doesn't race the thread that updates it."""
     self.update()
     if should_auto_upload(uploading=self.is_uploading(),
-                          # is_logging, not is_recording: an ignition-driven drive is
-                          # appending to the live route too, and uploading then would push
-                          # a route missing its tail.
-                          recording=is_logging(),
+                          onroad=ui_state.started,
                           wifi_ok=self.wifi_ok(),
                           configured=bool(self._params.get("SmbHost") and self._params.get("SmbSharePath")),
                           available=smb_upload.available(),
@@ -473,11 +470,11 @@ def _self_check() -> None:
   # must not roll over into a unit that isn't rendered
   assert fmt_size(4096 * 1024**3).endswith("G"), fmt_size(4096 * 1024**3)
 
-  ok = dict(uploading=False, recording=False, wifi_ok=True, configured=True,
+  ok = dict(uploading=False, onroad=False, wifi_ok=True, configured=True,
             available=True, has_pending=True, now=100.0, next_attempt=0.0)
   assert should_auto_upload(**ok)
   # every gate must independently block it
-  assert not should_auto_upload(**{**ok, "recording": True}), "must not upload mid-recording"
+  assert not should_auto_upload(**{**ok, "onroad": True}), "must not upload while onroad"
   assert not should_auto_upload(**{**ok, "uploading": True}), "must not double-start"
   assert not should_auto_upload(**{**ok, "wifi_ok": False})
   assert not should_auto_upload(**{**ok, "configured": False})

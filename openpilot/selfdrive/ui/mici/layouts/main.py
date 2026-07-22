@@ -1,10 +1,10 @@
 import pyray as rl
-import openpilot.cereal.messaging as messaging
 from openpilot.selfdrive.ui.mici.layouts.home import MiciHomeLayout
 from openpilot.selfdrive.ui.mici.layouts.settings.settings import SettingsLayout
 from openpilot.selfdrive.ui.mici.layouts.upload import upload_controller
 from openpilot.selfdrive.ui.mici.layouts.offroad_alerts import MiciOffroadAlerts
 from openpilot.selfdrive.ui.mici.onroad.augmented_road_view import AugmentedRoadView
+from openpilot.selfdrive.ui.mici.onroad.driver_camera_dialog import OnroadDriverView
 from openpilot.selfdrive.ui.ui_state import device, ui_state
 from openpilot.selfdrive.ui.mici.layouts.onboarding import OnboardingWindow
 from openpilot.selfdrive.ui.body.layouts.onroad import BodyLayout
@@ -20,8 +20,6 @@ class MiciMainLayout(Scroller):
   def __init__(self):
     super().__init__(snap_items=True, spacing=0, pad=0, scroll_indicator=False, edge_shadows=False)
 
-    self._pm = messaging.PubMaster(['bookmarkButton'])
-
     self._prev_onroad = False
     self._prev_standstill = False
     self._onroad_time_delay: float | None = None
@@ -31,12 +29,15 @@ class MiciMainLayout(Scroller):
     self._home_layout = MiciHomeLayout()
     self._alerts_layout = MiciOffroadAlerts()
     self._settings_layout = SettingsLayout()
-    self._car_onroad_layout = AugmentedRoadView(bookmark_callback=self._on_bookmark_clicked)
+    self._car_onroad_layout = AugmentedRoadView()
+    # recorder fork: driver camera as a page rather than an offroad-only settings preview --
+    # this is a recorder, so seeing what the dcamera is capturing matters mid-drive
+    self._driver_onroad_layout = OnroadDriverView()
     self._body_onroad_layout = BodyLayout()
 
     # Initialize widget rects
     for widget in (self._home_layout, self._alerts_layout, self._settings_layout,
-                   self._car_onroad_layout, self._body_onroad_layout):
+                   self._car_onroad_layout, self._driver_onroad_layout, self._body_onroad_layout):
       # TODO: set parent rect and use it if never passed rect from render (like in Scroller)
       widget.set_rect(rl.Rectangle(0, 0, gui_app.width, gui_app.height))
 
@@ -44,12 +45,10 @@ class MiciMainLayout(Scroller):
       self._alerts_layout,
       self._home_layout,
       self._car_onroad_layout,
+      self._driver_onroad_layout,
       self._body_onroad_layout,
     ])
     self._scroller.set_reset_scroll_at_show(False)
-
-    # Disable scrolling when onroad is interacting with bookmark
-    self._scroller.set_scrolling_enabled(lambda: not self._car_onroad_layout.is_swiping_left())
 
     # Set callbacks
     self._setup_callbacks()
@@ -146,11 +145,7 @@ class MiciMainLayout(Scroller):
       gui_app.pop_widgets_to(self, instant=True)
       self._scroll_to(self._home_layout)
 
-  def _on_bookmark_clicked(self):
-    user_bookmark = messaging.new_message('bookmarkButton')
-    user_bookmark.valid = True
-    self._pm.send('bookmarkButton', user_bookmark)
-
   def _on_body_changed(self):
     self._car_onroad_layout.set_visible(not ui_state.is_body)
+    self._driver_onroad_layout.set_visible(not ui_state.is_body)
     self._body_onroad_layout.set_visible(ui_state.is_body)
