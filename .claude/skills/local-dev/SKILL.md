@@ -47,7 +47,22 @@ wsl --install -d Ubuntu-24.04       # prompts for a UNIX username/password
 ```
 
 Ubuntu 24.04 ("noble") is the right choice — `tools/op.sh` `op_check_os()` accepts only
-`focal|jammy|kinetic|noble`.
+`focal|jammy|kinetic|noble`. `--no-launch` matters: without it the installer opens a console and
+blocks on an interactive UNIX username/password prompt. Provision afterwards instead:
+
+```powershell
+wsl -d Ubuntu-24.04 --user root -- bash -lc "useradd -m -s /bin/bash -G sudo <user> && printf '[user]\ndefault=<user>\n[boot]\nsystemd=true\n' > /etc/wsl.conf"
+wsl --terminate Ubuntu-24.04
+```
+
+**Two packages openpilot's setup does not install and needs** (both verified 2026-07-22):
+
+- `git-lfs` — without it `git lfs pull` is silently skipped and the models stay pointer stubs.
+  `tools/op.sh check` catches this. Install, then `git lfs install && git lfs pull`
+  (~1.8 GB: `big_driving_supercombo.onnx` alone is 1.7 GB).
+- `clang` — tinygrad compiles the model through it. Without it `scons` dies with
+  `FileNotFoundError: 'clang'` on `driving_tinygrad.pkl.chunkmanifest`, *after* several minutes
+  of model work, so it looks like a model problem and isn't.
 
 **Clone into the WSL filesystem, not `/mnt/c`.** Building over the Windows mount is very slow,
 case-insensitive, and has permission behaviour that breaks scons.

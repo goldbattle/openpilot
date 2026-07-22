@@ -80,6 +80,19 @@ A field named `COUNTER` that doesn't increment by 1 every frame fails `MAX_BAD_C
 the message is held **invalid from then on** — which is what drags `carState.canValid` to ~7%
 for an entire drive. It shows up as a UI/logging problem and is actually a naming problem.
 
+`CHECKSUM` fails differently and more quietly: there is no failure counter, the frame simply
+does not update (`parser.py`: "must have good counter and checksum to update data"), so the
+message goes stale and eventually times out. The tell is decoded values frozen at their
+initial 0 while the address is clearly present on the bus.
+
+> **Verified for this repo's DBC 2026-07-22:** `toyota_camry_xv40_2010_pt` declares `CHECKSUM`
+> on `SPEED` and `STEER_ANGLE_SENSOR`, and because of the `toyota_` prefix both are validated
+> with `toyota_checksum`. They **pass** — replaying route `00000024--018c2cdbb5--0` gives
+> `can_valid 6089/6100 (99.8%)`, `counter_fail 0` on all three subscribed messages, `SPEED` at
+> 51.0 Hz and `STEER_ANGLE_SENSOR` at 89.1 Hz with live values (`STEER_ANGLE -3.0`,
+> `STEER_SENSOR_QUALITY 100`). The 2010 Camry uses the same checksum as modern Toyotas. No
+> action needed; `dbc_check.py` still warns because the warning is right in general.
+
 Big-endian bit math, since it's the other silent-garbage source:
 `available = (start % 8 + 1) + 8 * (dlc - start // 8 - 1)`.
 
