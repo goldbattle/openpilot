@@ -372,22 +372,6 @@ class GreyBigButton(BigButton):
     self._draw_content(self._rect.y)
 
 
-class BigTileButton(BigButton):
-  """BigButton (same icon-top-right + label-bottom-left layout as SettingsBigButton
-  etc., same press-scale bounce) but with a background that scales to any size
-  instead of the fixed 402x180 button_rectangle.png -- for a button that fills most
-  of the screen rather than sitting at the standard size."""
-  def __init__(self, width: float, height: float, text: str = "", icon: Union[rl.Texture, None] = None):
-    super().__init__(text, "", icon)
-    self.set_rect(rl.Rectangle(0, 0, width, height))
-
-  def _render(self, _):
-    _, btn_x, btn_y, scale = self._handle_background()
-    scaled_rect = rl.Rectangle(btn_x, btn_y, self._rect.width * scale, self._rect.height * scale)
-    rl.draw_rectangle_rounded(scaled_rect, 0.12, 14, rl.Color(255, 255, 255, int(255 * 0.08)))
-    self._draw_content(btn_y)
-
-
 class BigMultiParamToggle(BigMultiToggle):
   def __init__(self, text: str, param: str, options: list[str], toggle_callback: Callable | None = None,
                select_callback: Callable | None = None):
