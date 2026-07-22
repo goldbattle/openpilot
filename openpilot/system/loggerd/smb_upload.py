@@ -69,7 +69,14 @@ class RouteFile:
 
   @property
   def done(self) -> bool:
-    return getxattr(self.path, UPLOAD_ATTR_NAME) == UPLOAD_ATTR_VALUE
+    try:
+      return getxattr(self.path, UPLOAD_ATTR_NAME) == UPLOAD_ATTR_VALUE
+    except OSError:
+      # EOPNOTSUPP: the filesystem has no xattr support, so there is no marker to read --
+      # the same answer as "not set". Only demo() hits this (tempfile lands on tmpfs); the
+      # log root is ext4, where upstream's deleter.py reads xattrs unguarded. Answering
+      # False errs toward re-uploading rather than silently skipping, the safe direction.
+      return False
 
 
 @dataclass
