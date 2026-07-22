@@ -13,7 +13,7 @@ def dmonitoringd_thread():
   sm = messaging.SubMaster(['driverStateV2', 'liveCalibration', 'carState', 'selfdriveState', 'modelV2'], poll='driverStateV2')
 
   DM = DriverMonitoring(rhd_saved=params.get_bool("IsRhdDetected"), always_on=params.get_bool("AlwaysOnDM"))
-  demo_mode = params.get_bool("IsDriverViewEnabled")
+  demo_mode=False
 
   # 20Hz <- dmonitoringmodeld
   while True:
