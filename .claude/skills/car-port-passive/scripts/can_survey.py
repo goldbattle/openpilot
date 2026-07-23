@@ -2,6 +2,9 @@
 """Survey the raw CAN in a recorded route: what addresses exist, how fast, and which bytes
 actually carry information.
 
+Runs on: WSL or the device  |  Needs: openpilot importable (not Windows). On the device:
+`comma.py py can_survey.py <route> --bus 1`.
+
 This is the first thing to run on a new car, before writing a single DBC line. It answers
 "what am I even looking at", and the per-byte report tells you which bytes are constant
 (ignore), which toggle a couple of bits (booleans: doors, brake, key), which ramp smoothly

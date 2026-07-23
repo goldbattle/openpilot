@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Run the openpilot UI locally against a replayed route -- the whole stack, no device.
-# Runs INSIDE WSL (needs the WSLg display). From the host:
+#
+# Runs on: WSL  |  Needs: openpilot built (scons) + WSLg display.
+#
+# From the host:
 #   wsl -d Ubuntu-24.04 -e bash /mnt/c/.../local-dev/scripts/run_ui.sh
 # or copy it into the WSL checkout and run it there.
 #

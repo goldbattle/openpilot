@@ -16,6 +16,23 @@ the others do the actual work.
 | deploy + inspect the device | `comma-device` | `comma.py` deploy/restart/status/logs/py |
 | is this change in scope | `fork-scope` | the four-bucket rule, drift measurement |
 
+## Scripts: where each runs
+
+Names are task-descriptive, not context-prefixed — several scripts run in more than one place,
+so a `host_`/`device_` prefix would lie. Instead, every script's header carries a uniform
+`Runs on: … | Needs: …` line; read it before running. The three execution contexts:
+
+| Context | What runs there | Scripts |
+|---|---|---|
+| **host** (Windows or WSL) | orchestration + static checks; no openpilot import | `comma.py`, `dbc_check.py` |
+| **WSL** (openpilot built) | anything importing/running openpilot off-device | `can_survey.py`, `rlog_stats.py`, `run_ui.sh` |
+| **device** (via SSH) | live probes against real hardware | any openpilot script, shipped with `comma.py py` |
+
+The pattern that matters: a script that needs openpilot (`can_survey`, `rlog_stats`) runs in
+**WSL** against a pulled route, or **on the device** via `comma.py py <script>` against live
+data — same script, two contexts, picked by where the data is. Host-only tools (`comma.py`,
+`dbc_check`) never import openpilot, which is why they work on Windows.
+
 ## The loop
 
 ```

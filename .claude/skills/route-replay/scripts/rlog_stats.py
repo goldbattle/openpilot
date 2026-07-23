@@ -2,6 +2,9 @@
 """Summarise a recorded route: which services logged, at what rate, and whether the car
 decode actually worked.
 
+Runs on: WSL or the device  |  Needs: openpilot importable (not Windows). On the device:
+`comma.py py rlog_stats.py <route> --canvalid`.
+
 This is the "did the drive record correctly" check. It answers, without opening a GUI:
 did every service publish, is canValid holding, did ignition stay asserted, were there
 gaps, and which CAN addresses were seen.

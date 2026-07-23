@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """One CLI for driving a comma device over SSH: deploy, restart, inspect, pull routes.
 
-Runs on the dev box (Windows or WSL), NOT on the device. Uses plain `ssh`/`scp` subprocesses
+Runs on: host (Windows or WSL)  |  Needs: ssh to the device ($COMMA_IP). Never on the device.
+
+Uses plain `ssh`/`scp` subprocesses
 so it has no openpilot imports -- openpilot can't even be imported on Windows (fcntl,
 params_pyx), which is exactly why this exists.
 

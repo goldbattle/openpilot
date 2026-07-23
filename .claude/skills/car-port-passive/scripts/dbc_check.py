@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Static validation of a DBC, and cross-reference of a carstate against it.
 
+Runs on: host (Windows) or WSL  |  Needs: nothing -- pure Python, no openpilot import.
+
 This is the substitute for CANParser on a dev box where openpilot can't be imported
 (Windows: fcntl, params_pyx; CANParser used to be a compiled extension). It catches the
 classes of bug that otherwise only surface as a silently-invalid message on the car.
