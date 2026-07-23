@@ -43,6 +43,7 @@ class AugmentedRoadView(CameraView):
     self._cached_matrix: np.ndarray | None = None
     self._content_rect = rl.Rectangle()
     self._last_click_time = 0.0
+    self._last_streams_query = 0.0
 
     self._model_renderer = ModelRenderer()
     self._hud_renderer = HudRenderer()
@@ -134,10 +135,21 @@ class AugmentedRoadView(CameraView):
     self._confidence_ball.render(self.rect)
 
   def _switch_stream_if_needed(self, sm):
-    # recorder fork: dropped upstream's `selfdriveState.experimentalMode and` gate. That tied
-    # the low-speed wide view to a mode you can only enable with longitudinal control, which
-    # a dashcamOnly car never has -- so the wide camera was unreachable here. Nothing about
-    # picking which recorded stream to *look at* depends on being able to drive the car.
+    # recorder fork: CameraView captures available_streams once, at connect time. camerad
+    # brings the wide camera up a beat after the road camera, so a road view that connected
+    # first cached a list without WIDE and never saw it appear -- which stuck us on the road
+    # cam for the whole drive even at a standstill. Re-query (throttled to 1s) until WIDE shows
+    # up; once it does, the condition below is false and we stop querying. Verified on device:
+    # camerad publishes ROAD, DRIVER, WIDE, with WIDE landing ~2s after the others.
+    if (WIDE_CAM not in self.available_streams and self.client is not None
+        and self.client.is_connected() and rl.get_time() - self._last_streams_query > 1.0):
+      self._last_streams_query = rl.get_time()
+      self.available_streams = self.client.available_streams(self._name, block=False)
+
+    # dropped upstream's `selfdriveState.experimentalMode and` gate. That tied the low-speed
+    # wide view to a mode you can only enable with longitudinal control, which a dashcamOnly car
+    # never has -- so the wide camera was unreachable here. Nothing about picking which recorded
+    # stream to *look at* depends on being able to drive the car.
     if WIDE_CAM in self.available_streams:
       v_ego = sm['carState'].vEgo
       if v_ego < WIDE_CAM_MAX_SPEED:

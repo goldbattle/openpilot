@@ -22,21 +22,30 @@ class DriverCameraView(CameraView):
 
 
 class BaseDriverCameraDialog(Widget):
+  # Overlay element sizes. These defaults are tuned for the full-screen settings preview;
+  # OnroadDriverView overrides them small so the overlay doesn't swallow a 536x240 page.
+  DMOJI_SIZE = 200
+  EYE_SIZE = 74
+  GLASSES_SIZE = 171
+  FACE_BOX_SIZE = 75
+  AWARENESS_FONT = 44
+  ALERT_FONT = 40
+
   # Not a NavWidget so training guide can use this without back navigation
   def __init__(self):
     super().__init__()
     self._camera_view = DriverCameraView("camerad", VisionStreamType.VISION_STREAM_DRIVER)
     self.driver_state_renderer = DriverStateRenderer(lines=True)
-    self.driver_state_renderer.set_rect(rl.Rectangle(0, 0, 200, 200))
+    self.driver_state_renderer.set_rect(rl.Rectangle(0, 0, self.DMOJI_SIZE, self.DMOJI_SIZE))
     self.driver_state_renderer.load_icons()
     self._pm: messaging.PubMaster | None = None
 
     # Load eye icons
     self._eye_fill_texture = None
     self._eye_orange_texture = None
-    self._eye_size = 74
+    self._eye_size = self.EYE_SIZE
     self._glasses_texture = None
-    self._glasses_size = 171
+    self._glasses_size = self.GLASSES_SIZE
 
     self._load_eye_textures()
 
@@ -124,11 +133,11 @@ class BaseDriverCameraDialog(Widget):
     is_vision = dm_state.activePolicy == log.DriverMonitoringState.MonitoringPolicy.vision
     awareness_pct = dm_state.visionPolicyState.awarenessPercent if is_vision else dm_state.wheeltouchPolicyState.awarenessPercent
     gui_label(rl.Rectangle(rect.x + 2, rect.y + 2, rect.width, rect.height),
-              f"Awareness: {awareness_pct:.0f}%", font_size=44, font_weight=FontWeight.MEDIUM,
+              f"Awareness: {awareness_pct:.0f}%", font_size=self.AWARENESS_FONT, font_weight=FontWeight.MEDIUM,
               alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT,
               alignment_vertical=rl.GuiTextAlignmentVertical.TEXT_ALIGN_TOP,
               color=rl.Color(0, 0, 0, 180))
-    gui_label(rect, f"Awareness: {awareness_pct:.0f}%", font_size=44, font_weight=FontWeight.MEDIUM,
+    gui_label(rect, f"Awareness: {awareness_pct:.0f}%", font_size=self.AWARENESS_FONT, font_weight=FontWeight.MEDIUM,
               alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT,
               alignment_vertical=rl.GuiTextAlignmentVertical.TEXT_ALIGN_TOP,
               color=rl.Color(255, 255, 255, int(255 * 0.9)))
@@ -141,11 +150,11 @@ class BaseDriverCameraDialog(Widget):
     alignment = rl.GuiTextAlignment.TEXT_ALIGN_RIGHT if self.driver_state_renderer.is_rhd else rl.GuiTextAlignment.TEXT_ALIGN_LEFT
 
     shadow_rect = rl.Rectangle(rect.x + 2, rect.y + 2, rect.width, rect.height)
-    gui_label(shadow_rect, alert_level_str, font_size=40, font_weight=FontWeight.BOLD,
+    gui_label(shadow_rect, alert_level_str, font_size=self.ALERT_FONT, font_weight=FontWeight.BOLD,
               alignment=alignment,
               alignment_vertical=rl.GuiTextAlignmentVertical.TEXT_ALIGN_BOTTOM,
               color=rl.Color(0, 0, 0, 180))
-    gui_label(rect, alert_level_str, font_size=40, font_weight=FontWeight.BOLD,
+    gui_label(rect, alert_level_str, font_size=self.ALERT_FONT, font_weight=FontWeight.BOLD,
               alignment=alignment,
               alignment_vertical=rl.GuiTextAlignmentVertical.TEXT_ALIGN_BOTTOM,
               color=rl.Color(255, 255, 255, int(255 * 0.9)))
@@ -186,7 +195,7 @@ class BaseDriverCameraDialog(Widget):
     scale_y = rect.height / 1080.0
     fbox_x = rect.x + rect.width / 2 + offset_x * scale_x
     fbox_y = rect.y + rect.height / 2 + offset_y * scale_y
-    box_size = 75
+    box_size = self.FACE_BOX_SIZE
     line_thickness = 3
 
     line_color = rl.Color(255, 255, 255, int(alpha * 255))
@@ -235,7 +244,10 @@ class OnroadDriverView(BaseDriverCameraDialog):
   of the road view. Same face box / eye + sunglasses icons / awareness readout as the settings
   preview, plus the shared capture status line.
 
-  Everything is laid out exactly as the settings preview, dmoji included.
+  The overlay sizes are shrunk hard from the base defaults: those are tuned for the full-screen
+  settings preview, where a 200px dmoji and 44pt awareness text are fine, but on a 536x240 page
+  they cover most of the video. The point of this page is to SEE the driver feed, so the
+  monitoring overlay stays small and out of the way.
 
   Deliberately does NOT inherit the base's show/hide behaviour. This page is a permanent
   member of the scroller, so its show_event fires whenever the onroad view is scrolled to,
@@ -244,6 +256,12 @@ class OnroadDriverView(BaseDriverCameraDialog):
   already owns while onroad, which would have the alert renderer reading our stub messages.
   Leaving _pm as None makes _publish_alert_sound a no-op, so DM sounds come from soundd as
   usual."""
+  DMOJI_SIZE = 72
+  EYE_SIZE = 32
+  GLASSES_SIZE = 74
+  FACE_BOX_SIZE = 44
+  AWARENESS_FONT = 20
+  ALERT_FONT = 18
 
   def show_event(self):
     Widget.show_event(self)  # skip BaseDriverCameraDialog's param + PubMaster setup
