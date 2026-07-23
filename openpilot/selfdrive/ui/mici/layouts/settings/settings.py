@@ -56,10 +56,11 @@ class SettingsLayout(NavScroller):
     upload_btn = UploadBigButton("upload", "", None)
     upload_btn.set_click_callback(lambda: gui_app.push_widget(upload_panel))
 
-    # recorder fork: firehose gone -- panel unwired here and settings/firehose.py deleted. It
-    # exists to maximize training-data uploads to comma, and it also polls comma's API for
-    # stats. This fork keeps all data on device: uploader, athenad and firehose are all off,
-    # and SMB (above) is the only way anything leaves the device.
+    # recorder fork: firehose gone -- the panel is simply not wired into this menu. The file
+    # settings/firehose.py is left in place (upstream) because the big-UI firehose subclasses
+    # FirehoseLayoutBase from it, and ui.py imports that path unconditionally even though a mici
+    # device never renders it. Firehose exists to maximize training-data uploads to comma; this
+    # fork keeps all data on device (uploader + athenad off), and SMB (above) is the only egress.
 
     self._scroller.add_widgets([
       toggles_btn,
