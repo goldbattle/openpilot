@@ -98,10 +98,39 @@ pytest openpilot/selfdrive/car/tests/test_car_interfaces.py
 pytest opendbc_repo/opendbc/safety/tests/test_toyota_xv40.py    # libsafety, needs cffi
 scons -j$(nproc)                                                # after C++/capnp changes
 
-# UI against a replayed route -- see the route-replay skill
+# UI against a replayed route -- see "Running the UI locally" below
 openpilot/tools/replay/replay --demo &
 ./openpilot/selfdrive/ui/ui.py
 ```
+
+## Running the UI locally (the whole stack, no device)
+
+WSLg gives WSL a display, so the pyray UI renders as a real window on the Windows desktop.
+`scripts/run_ui.sh` does the whole dance — replay a route, wait for it to publish, open the UI:
+
+```bash
+wsl -d Ubuntu-24.04 -e bash /mnt/c/Users/Patrick/Code/openpilot/.claude/skills/local-dev/scripts/run_ui.sh
+# or, inside WSL:  ~/.../local-dev/scripts/run_ui.sh [route-id]
+```
+
+The demo log has `deviceState.started = True`, so the UI goes **onroad on its own** and you see
+exactly what the driver sees: road camera with the model's path/lane/lead overlay, the
+driver-monitoring page one swipe right, the capture status line along the bottom. `BIG=1` gets
+the large tici layout instead of mici.
+
+What's actually verified locally this way: layout, swipe/scroll, the model and HUD renderers,
+the driver-camera page, camera decode via VisionIPC. What is **not**: real camera exposure,
+touch on a physical panel, anything gated on `deviceState` fields the demo log doesn't carry.
+
+Environment facts (WSLg, verified 2026-07-22):
+- Rendering is **software GL** — `llvmpipe` (Mesa), no `/dev/dri`, no GPU passthrough for GL.
+  Fine for 536×240; don't expect device frame rates.
+- raylib picks the **X11/GLFW** backend (Xwayland). Occasionally the window dies at startup with
+  `XIO: fatal IO error 2 on X server ":0"`. That is transient Xwayland flakiness, not a code
+  fault — rerun and it comes up. A clean run holds indefinitely.
+- `wifi_manager.py` logs `Object path ('T') must start with /` on a loop. There is no
+  NetworkManager in WSL; the DBus call is caught and retried in a daemon thread. Harmless noise,
+  not a crash. The network settings panel just won't populate.
 
 ## Working on Windows without WSL
 
@@ -144,4 +173,4 @@ recovering over SSH. Compile-check that file especially.
 
 ## Related
 
-`route-replay` to feed the local UI, `comma-device` to deploy once it's green.
+`dev-loop` for the overall workflow, `route-replay` to feed the local UI, `comma-device` to deploy once it's green.

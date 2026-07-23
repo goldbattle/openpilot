@@ -35,8 +35,15 @@ python $P routes              # recorded routes, size, which is still recording
 python $P logs -n 300 -g card # tail the manager tmux pane, optionally grepped
 python $P params RecordFront  # read a param; add a value to write it
 python $P pull 00000024--018c2cdbb5 ./routes
+python $P py probe.py         # ship a local .py to the device and run it under the venv
 python $P exec ls /data/media/0/realdata
 ```
+
+**`py` is the one to reach for when investigating.** Write a normal local script that imports
+openpilot freely (it runs *on the device*, where the imports work), and `py` scp's it to
+`/tmp` and runs it with `PYTHONPATH` set. This replaces the scp-a-file-then-`exec`-python dance
+— every "check something live on the device" probe should be a `py` script, not an inline
+snippet fought through two layers of shell quoting. Anything after the path is passed as argv.
 
 ## Deploying
 
@@ -50,7 +57,10 @@ python $P deploy --branch test --build --restart
 `deploy` refuses to run if local `HEAD != origin/<branch>` (otherwise you silently deploy the
 previous commit) and refuses to reset over a dirty device tree unless you pass `--force`.
 `--build` runs scons; if it fails, deploy stops **before** restarting rather than leaving you
-with a device that boots broken.
+with a device that boots broken. With `--restart` it then **polls until the ui process comes
+back** (up to 90s) and tells you if it didn't — no more `sleep 45 && hope`. A ui that never
+comes up means the manager is crash-looping; go straight to `logs`. `restart` waits the same
+way (`--no-wait` to skip).
 
 Why not scp: a shell script copied from a Windows working tree carries CRLF, the
 `#!/usr/bin/env bash` shebang becomes `bash\r`, and the device bricks at the boot logo with
@@ -127,5 +137,5 @@ low-voltage shutdown threshold, and the device will power off mid-test.
 
 ## Related
 
-`route-replay` for analysing what you recorded, `car-port-passive` for adding a car,
+`dev-loop` for the full edit->deploy workflow this fits into, `route-replay` for analysing what you recorded, `car-port-passive` for adding a car,
 `fork-scope` for what belongs in this fork at all.

@@ -45,12 +45,21 @@ def resolve_ip(arg_ip: str | None) -> str:
 
 def ssh_argv(ip: str, remote_cmd: str, tty: bool = False) -> list[str]:
   argv = ["ssh", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10"]
-  if tty:
-    argv.append("-t")
+  # -T (disable tty) unless explicitly asked -- otherwise ssh prints "Pseudo-terminal will not
+  # be allocated because stdin is not a terminal" every call, since we always run piped.
+  argv.append("-t" if tty else "-T")
   key = os.environ.get("COMMA_SSH_KEY")
   if key:
     argv += ["-i", key]
   return argv + [f"comma@{ip}", remote_cmd]
+
+
+def scp_to(ip: str, local_path: str, remote_path: str) -> None:
+  key = os.environ.get("COMMA_SSH_KEY")
+  argv = ["scp", "-q", "-o", "StrictHostKeyChecking=accept-new"] + (["-i", key] if key else []) + \
+         [local_path, f"comma@{ip}:{remote_path}"]
+  if subprocess.run(argv).returncode != 0:
+    raise SystemExit(f"scp failed: {local_path} -> {remote_path}")
 
 
 def run(ip: str, remote_cmd: str, check: bool = True, quiet: bool = False) -> str:
@@ -78,6 +87,24 @@ def py(ip: str, snippet: str, check: bool = True) -> str:
   cmd = (f"cd {DEVICE_ROOT} && PYTHONPATH={DEVICE_ROOT} {VENV_PY} - <<'PYEOF'\n"
          f"{snippet}\nPYEOF")
   return run(ip, cmd, check=check)
+
+
+def wait_for_ui(ip: str, timeout: float = 90.0) -> bool:
+  """Poll until the ui process is back after a restart. Returns True if it came up.
+
+  Beats `sleep 45 && hope`: a restart is ~40s but variable, and a crash-looping manager
+  never brings ui up at all -- this catches that in bounded time instead of a fixed guess.
+  """
+  import time
+  t0 = time.monotonic()
+  while time.monotonic() - t0 < timeout:
+    out = run(ip, "pgrep -f 'selfdrive.ui.ui' >/dev/null && echo up || echo down", check=False, quiet=True)
+    if out.strip() == "up":
+      print(f"   ui up after {time.monotonic()-t0:.0f}s")
+      return True
+    time.sleep(3)
+  print(f"   ui did NOT come up within {timeout:.0f}s -- check `comma.py logs`")
+  return False
 
 
 # ---------------------------------------------------------------- commands
@@ -191,6 +218,8 @@ def cmd_deploy(args) -> int:
   if args.restart:
     print("==> restarting openpilot (~40s)")
     stream(ip, "sudo systemctl restart comma")
+    if not wait_for_ui(ip):
+      return 1
   else:
     print("note: not restarted. Changes are on disk but the running manager has stale code.")
     print("      run `comma.py restart` when ready.")
@@ -199,7 +228,10 @@ def cmd_deploy(args) -> int:
 
 def cmd_restart(args) -> int:
   ip = resolve_ip(args.ip)
-  return stream(ip, "sudo systemctl restart comma")
+  rc = stream(ip, "sudo systemctl restart comma")
+  if rc == 0 and not args.no_wait:
+    return 0 if wait_for_ui(ip) else 1
+  return rc
 
 
 def cmd_reboot(args) -> int:
@@ -317,7 +349,24 @@ if frames == 0:
 
 def cmd_exec(args) -> int:
   ip = resolve_ip(args.ip)
-  return stream(ip, " ".join(args.cmd), tty=True)
+  return stream(ip, " ".join(args.cmd), tty=args.tty)
+
+
+def cmd_py(args) -> int:
+  """Copy a local .py to the device and run it under the venv with PYTHONPATH set.
+
+  This is the scp-a-probe-then-exec dance done properly: write a normal local script (imports
+  openpilot freely -- it runs ON the device, not on Windows), and this ships and runs it.
+  Anything after the script path is passed to it as argv.
+  """
+  ip = resolve_ip(args.ip)
+  local = os.path.abspath(args.script)
+  if not os.path.isfile(local):
+    return die(f"no such script: {local}")
+  remote = f"/tmp/comma_py_{os.path.basename(local)}"
+  scp_to(ip, local, remote)
+  extra = " ".join(shlex.quote(a) for a in args.args)
+  return stream(ip, f"cd {DEVICE_ROOT} && PYTHONPATH={DEVICE_ROOT} {VENV_PY} {remote} {extra}")
 
 
 def main() -> int:
@@ -336,7 +385,9 @@ def main() -> int:
   d.add_argument("--no-check", action="store_true", help="skip the local==origin check")
   d.set_defaults(fn=cmd_deploy)
 
-  sub.add_parser("restart", help="systemctl restart comma (~40s)").set_defaults(fn=cmd_restart)
+  r = sub.add_parser("restart", help="systemctl restart comma (~40s), waits for ui by default")
+  r.add_argument("--no-wait", action="store_true", help="don't poll for the ui to come back")
+  r.set_defaults(fn=cmd_restart)
   sub.add_parser("reboot", help="full device reboot").set_defaults(fn=cmd_reboot)
 
   b = sub.add_parser("build", help="scons on device")
@@ -367,8 +418,14 @@ def main() -> int:
   c.set_defaults(fn=cmd_can)
 
   e = sub.add_parser("exec", help="run an arbitrary command on the device")
+  e.add_argument("--tty", action="store_true", help="allocate a tty (for interactive commands)")
   e.add_argument("cmd", nargs=argparse.REMAINDER)
   e.set_defaults(fn=cmd_exec)
+
+  py_p = sub.add_parser("py", help="copy a local .py to the device and run it under the venv")
+  py_p.add_argument("script", help="path to a local python script (may import openpilot)")
+  py_p.add_argument("args", nargs=argparse.REMAINDER, help="argv passed to the script")
+  py_p.set_defaults(fn=cmd_py)
 
   args = p.parse_args()
   try:

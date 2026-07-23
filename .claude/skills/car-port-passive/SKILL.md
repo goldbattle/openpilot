@@ -200,5 +200,5 @@ shutdown threshold, and the device will power off mid-test.
 
 ## Related
 
-`comma-device` to deploy and inspect, `route-replay` to analyse the data, `fork-scope` for
+`dev-loop` for the overall workflow, `comma-device` to deploy and inspect, `route-replay` to analyse the data, `fork-scope` for
 whether a change belongs in this fork at all.
