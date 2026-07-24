@@ -102,12 +102,13 @@ def render(rect: rl.Rectangle) -> None:
   elapsed = onroad_elapsed_str()
   if not elapsed:
     return
-  # blinking dot: the only element that proves the UI is still updating, not frozen on a
-  # stale frame. 2 Hz, same as a camcorder.
-  if int(rl.get_time() * 2) % 2 == 0:
-    rl.draw_circle(int(rect.x + rect.width - PAD - 110), int(y + FONT_SIZE / 2), 6, rl.RED)
-  gui_label(rl.Rectangle(rect.x + rect.width - PAD - 96, y, 96, FONT_SIZE + 2), f"REC {elapsed}",
-            font_size=FONT_SIZE, font_weight=FontWeight.BOLD, color=rl.RED)
+  # "REC h:mm:ss" right-aligned to the right edge. Right-aligned (not a fixed 96px box, which
+  # clipped it to "REC 0") so the whole thing shows and, if it ever did overrun, the time -- the
+  # part that matters -- stays visible and "REC" clips first. No blinking dot: the ticking
+  # seconds already prove the UI is live, and the dot just ate width the time needed.
+  gui_label(rl.Rectangle(rect.x, y, rect.width - PAD, FONT_SIZE + 2), f"REC {elapsed}",
+            font_size=FONT_SIZE, font_weight=FontWeight.BOLD, color=rl.RED,
+            alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT)
 
 
 def _self_check() -> None:
