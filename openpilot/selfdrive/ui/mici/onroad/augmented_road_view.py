@@ -162,6 +162,20 @@ class AugmentedRoadView(CameraView):
     else:
       target = ROAD_CAM
 
+    # TEMP DIAGNOSTIC (wide cam) -- remove after debugging
+    _now = rl.get_time()
+    if _now - getattr(self, "_dbg_t", 0.0) > 1.0:
+      self._dbg_t = _now
+      try:
+        cs = sm['carState']
+        with open("/tmp/wide_dbg.log", "a") as _f:
+          _f.write(f"streams={[str(s) for s in self.available_streams]} "
+                   f"vEgo={cs.vEgo:.2f} canValid={cs.canValid} started={ui_state.started} "
+                   f"stream_type={self.stream_type} target={target} switching={self._switching} "
+                   f"connected={self.client.is_connected() if self.client else None}\n")
+      except Exception as _e:
+        pass
+
     if self.stream_type != target:
       self.switch_stream(target)
 
