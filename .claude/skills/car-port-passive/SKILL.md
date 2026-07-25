@@ -47,6 +47,13 @@ Frames but 0 addresses on the bus you expect → multiplexing. Nothing at all �
 
 ## 2. Author and validate the DBC
 
+The steps here — survey the bytes, then validate — assume you already have candidate signals to
+check. Working out *which bit is what* from a bus you know nothing about is its own loop:
+record time-synced narrated audio while you operate the car, then window/correlate the log
+against the narration. That deeper decode playbook, plus its inspection scripts, lives in the
+opendbc submodule: **`opendbc_repo/.claude/skills/reverse-engineer-can/`**. It produced this
+repo's XV40 DBC; come back here to survey, validate, and wire the result into a port.
+
 Survey first, guess never:
 
 ```bash
@@ -200,5 +207,7 @@ shutdown threshold, and the device will power off mid-test.
 
 ## Related
 
-`dev-loop` for the overall workflow, `comma-device` to deploy and inspect, `route-replay` to analyse the data, `fork-scope` for
-whether a change belongs in this fork at all.
+`reverse-engineer-can` (in `opendbc_repo/.claude/skills/`) for decoding an unknown bus from
+scratch into the DBC this port builds on. `dev-loop` for the overall workflow, `comma-device` to
+deploy and inspect, `route-replay` to analyse the data, `fork-scope` for whether a change belongs
+in this fork at all.
