@@ -43,6 +43,11 @@ INITIAL_BACKOFF = 1.0
 MAX_BACKOFF = 60.0
 NO_NETWORK_POLL = 5.0
 SESSION_TIMEOUT = 8.0  # give up fast on a bad host/share instead of hanging indefinitely
+# Per-op send/recv cap. smbprotocol leaves the socket in blocking mode with no timeout
+# (transport.py: settimeout(None) right after connect), so a half-dead connection hangs a
+# write forever -- which is how an interrupted upload orphans a half-written .part and its
+# server-side handle. Bound every op so a stalled write raises instead of wedging the thread.
+SOCKET_TIMEOUT = 30.0
 SMB_PORT = 445
 SMB_UNAVAILABLE = "smbprotocol not installed"
 
@@ -138,6 +143,17 @@ def list_routes(root: str | None = None) -> list[Route]:
       route.files.append(RouteFile(fn, f"{logdir}/{name}", size))
 
   return [r for r in routes.values() if r.files or r.recording]
+
+
+def _cap_socket_timeout(session, timeout: float = SOCKET_TIMEOUT) -> None:
+  """Put a send/recv timeout on the registered session's socket. Reaches into smbprotocol
+  internals because there's no public knob (register_session's connection_timeout only
+  covers the initial connect); guarded so a layout change there degrades to the old
+  blocking behaviour instead of crashing the upload."""
+  try:
+    session.connection.transport._sock.settimeout(timeout)
+  except Exception:
+    pass
 
 
 def _unc_path(host: str, share_path: str, rel_name: str = "") -> str:
@@ -240,19 +256,24 @@ def run(host: str, share_path: str, username: str, password: str, routes: list[R
         stop_event: threading.Event, on_error: Callable[[str], None] | None = None) -> None:
   """Upload every not-yet-done file across `routes`, oldest route first. Retries
   forever with capped exponential backoff on failure (bad connection, share down,
-  Wi-Fi dropped mid-transfer, ...) until everything is done or stop_event is set."""
+  Wi-Fi dropped mid-transfer, ...) until everything is done or stop_event is set.
+
+  A file that fails is *skipped*, not retried in place: one un-writable file (an orphaned
+  .part still locked on the server, a vanished local file) must not block the whole
+  backlog behind it. It stays not-done and gets another chance on the next pass."""
   if smbclient is None:
     if on_error:
       on_error(SMB_UNAVAILABLE)
     return
   try:
-    smbclient.register_session(host, username=username or "", password=password or "", connection_timeout=SESSION_TIMEOUT)
+    session = smbclient.register_session(host, username=username or "", password=password or "", connection_timeout=SESSION_TIMEOUT)
   except Exception as e:
     # runs on a daemon thread -- an uncaught exception here would just silently kill it
     cloudlog.exception("smb register_session failed")
     if on_error:
       on_error(str(e))
     return
+  _cap_socket_timeout(session)
 
   backoff = INITIAL_BACKOFF
   while not stop_event.is_set():
@@ -260,21 +281,26 @@ def run(host: str, share_path: str, username: str, password: str, routes: list[R
       stop_event.wait(NO_NETWORK_POLL)
       continue
 
-    next_up = next(next_file_to_upload(routes), None)
-    if next_up is None:
-      return
+    uploaded = failed = 0
+    for route, rf in next_file_to_upload(routes):
+      if stop_event.is_set() or not network_ok():
+        break
+      try:
+        upload_file(host, share_path, username, password, rf,
+                    progress_cb=lambda done, total, route=route: progress_cb(route, done, total))
+        uploaded += 1
+      except Exception as e:
+        cloudlog.exception("smb upload failed")
+        if on_error:
+          on_error(str(e))
+        failed += 1  # skip this file, keep draining the rest of the backlog
 
-    route, rf = next_up
-    try:
-      upload_file(host, share_path, username, password, rf,
-                  progress_cb=lambda done, total: progress_cb(route, done, total))
-      backoff = INITIAL_BACKOFF
-    except Exception as e:
-      cloudlog.exception("smb upload failed")
-      if on_error:
-        on_error(str(e))
-      stop_event.wait(backoff)
-      backoff = min(backoff * 2, MAX_BACKOFF)
+    if failed == 0:
+      return  # everything drained
+    # Some file(s) failed. Back off before re-passing, but reset the backoff if we still
+    # made forward progress this pass so a lone poison file doesn't slow the good ones.
+    backoff = INITIAL_BACKOFF if uploaded else min(backoff * 2, MAX_BACKOFF)
+    stop_event.wait(backoff)
 
 
 def demo() -> None:
@@ -330,7 +356,51 @@ def demo() -> None:
 
     assert route_id("00000000--aaaaaaaaaa--3") == "00000000--aaaaaaaaaa"
 
+  _check_run_skips_poison()
   print("smb_upload self-check OK")
+
+
+def _check_run_skips_poison() -> None:
+  """The core guarantee: one file that always fails (a locked .part on the server) must not
+  block the files behind it. Fakes smbclient + upload_file so it runs with no network."""
+  global smbclient, upload_file
+  import types
+
+  routes = [Route("r", [RouteFile(p, p, 1) for p in ("a/good1", "b/poison", "c/good2")])]
+  done_marks: set[str] = set()
+
+  real_smbclient, real_upload = smbclient, upload_file
+  smbclient = types.SimpleNamespace(register_session=lambda *a, **k: types.SimpleNamespace())
+
+  uploaded: list[str] = []
+  def fake_upload(host, share, u, pw, rf, progress_cb=None):
+    if "poison" in rf.rel_name:
+      raise OSError("locked .part on server")
+    uploaded.append(rf.rel_name)
+    done_marks.add(rf.path)
+  upload_file = fake_upload
+  # RouteFile.done drives next_file_to_upload; back it with our in-memory mark set
+  real_done = RouteFile.done
+  RouteFile.done = property(lambda self: self.path in done_marks)  # type: ignore[assignment]
+
+  try:
+    stop = threading.Event()
+    errs: list[str] = []
+    def on_err(m):
+      errs.append(m)
+      if len(errs) >= 2:  # poison has been retried across a second pass -> enough
+        stop.set()
+    orig_backoff = globals()["INITIAL_BACKOFF"]
+    globals()["INITIAL_BACKOFF"] = 0.0
+    run("h", "s", "", "", routes, lambda: True, lambda r, d, t: None, stop, on_error=on_err)
+  finally:
+    globals()["INITIAL_BACKOFF"] = orig_backoff
+    smbclient, upload_file = real_smbclient, real_upload
+    RouteFile.done = real_done  # restore the real xattr-backed property
+
+  assert "a/good1" in uploaded and "c/good2" in uploaded, \
+    f"a poison file in the middle blocked the others: {uploaded}"
+  assert errs, "poison file should have surfaced an error"
 
 
 if __name__ == "__main__":
