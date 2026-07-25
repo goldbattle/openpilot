@@ -42,7 +42,13 @@ SafetyModel = car.CarParams.SafetyModel
 AlertLevel = log.DriverMonitoringState.AlertLevel
 MonitoringPolicy = log.DriverMonitoringState.MonitoringPolicy
 
-IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
+# Safety modes where the panda never grants controlsAllowed, so an engaged openpilot that
+# sees controlsAllowed=False is the expected steady state, not a controlsMismatch fault.
+# recorder fork: elm327 is added because OBD-II observability ports (e.g. toyota_xv40) run the
+# panda in elm327 for bus-1 multiplexing -- a diagnostic mode whose tx hook rejects every
+# control message -- so they engage for visualisation while the panda correctly never allows
+# control. Without this they trip a permanent "TAKE CONTROL IMMEDIATELY" ~2s after engaging.
+IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput, SafetyModel.elm327)
 
 
 class SelfdriveD:
@@ -229,6 +235,16 @@ class SelfdriveD:
         if self.sm.frame > int(2. / DT_CTRL) and self.initialized:
           # body always wants to enable
           self.events.add(EventName.pcmEnable)
+
+      # recorder fork: an observability car port (dashcamOnly False, noOutput safety, no cruise
+      # buttons on the bus) engages on ignition and stays engaged -- so the UI always renders the
+      # engaged view (bright model path, planned trajectory) it exists to show. Like notCar above
+      # this is LEVEL-based (re-added every frame after init), not the edge-based pcmEnable from
+      # car_events: carState reports cruise enabled from frame 0, so the single rising edge is
+      # gone before selfdrived finishes initialising and would otherwise never be seen. Nothing
+      # actuates regardless -- the panda's noOutput mode blocks all TX in firmware.
+      elif self.CP.brand == 'toyota_xv40' and self.sm.frame > int(2. / DT_CTRL) and self.initialized:
+        self.events.add(EventName.pcmEnable)
 
       # Disable on rising edge of accelerator or brake. Also disable on brake when speed > 0
       if (CS.gasPressed and not self.CS_prev.gasPressed and self.disengage_on_accelerator) or \

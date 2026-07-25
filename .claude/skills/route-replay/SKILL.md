@@ -17,7 +17,9 @@ Four different things get called "replay". Pick the right one:
 | Push logged CAN onto real hardware | `tools/replay/can_replay.py` + panda jungle | host + jungle |
 | Answer a question about a log in bulk | `scripts/rlog_stats.py` (here) | host or device |
 
-All of these need openpilot importable and built — **WSL, not Windows**. See `local-dev`.
+All of these need openpilot importable and built — on a **Linux host (native or WSL)**, not
+bare Windows. Native Linux (verified on Arch) is smoother: real GPU for modeld, real desktop GL
+for the UI. See `local-dev`.
 
 ## Getting a route onto the host
 

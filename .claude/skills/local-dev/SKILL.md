@@ -5,13 +5,18 @@ description: Build, run and test openpilot on the host laptop in WSL Ubuntu befo
 
 # local-dev
 
-The host is a **Windows laptop that SSHs into the comma**. Two environments, and knowing which
-one a task belongs in saves the most time:
+The dev host is **a Linux box** — either a **native Linux desktop** (this fork is verified on
+Arch, 2026-07-25) or **WSL Ubuntu under Windows**. Native Linux is the smoother of the two: real
+GPU/GL, no `/mnt/c` penalty, clone anywhere. Everything below that says "WSL" applies verbatim to
+a native Linux checkout; the WSL-specific quirks (WSLg software GL, the `/mnt/c` warning) simply
+don't apply there. See **Running natively on Linux (Arch)** below for the setup delta. Know which
+environment a task belongs in:
 
-- **Windows itself** — editing, git, and pure-Python static checks. openpilot **cannot be
-  imported at all** here: `common/gpio.py` needs `fcntl` (POSIX only) and `common/params_pyx` is
-  an unbuilt Cython extension.
-- **WSL Ubuntu** — the real dev environment. Builds, tests, replay, cabana, the UI.
+- **Windows itself** (WSL setups only) — editing, git, and pure-Python static checks. openpilot
+  **cannot be imported at all** here: `common/gpio.py` needs `fcntl` (POSIX only) and
+  `common/params_pyx` is an unbuilt Cython extension.
+- **The Linux host (native or WSL)** — the real dev environment. Builds, tests, replay, cabana,
+  the UI, and running modeld / locationd against a route.
 - **The device** — only for what needs the actual hardware.
 
 ## What can be tested where
@@ -80,6 +85,34 @@ Notes that differ from older openpilot docs: `tools/ubuntu_setup.sh` and
 `tools/setup_dependencies.sh` (distro-agnostic, installs `build-essential curl
 libcurl4-openssl-dev locales git xclip wl-clipboard`) plus `uv sync`; the Ubuntu version gate
 lives in `tools/op.sh`. `.python-version` pins 3.12.13, which uv fetches itself.
+
+## Running natively on Linux (Arch)
+
+Verified end to end on Arch + Hyprland/Wayland with an NVIDIA GPU, 2026-07-25. No WSL layer, so
+none of the WSLg caveats apply: the raylib UI renders on the real desktop GL stack (crisp, not
+llvmpipe), and modeld runs the model on the GPU (~20 Hz, not the WSL software path).
+
+Setup delta from the WSL section: `tools/setup_dependencies.sh` is Debian/apt, so it does **not**
+run on Arch — provide the equivalents from `pacman` (`base-devel curl clang git git-lfs`, plus
+`grim` for screenshotting the UI) and then `uv sync --frozen --all-extras`; `scons -j$(nproc)`
+builds the same. The `git clone` path has no `/mnt/c` penalty — clone wherever. `tools/op.sh`'s
+Ubuntu version gate will refuse to run, which is fine on Arch; invoke the steps directly.
+
+Environment facts that differ from WSL:
+- The raylib UI window comes up with **`class: UI`** (not "openpilot"); find it with
+  `hyprctl clients`. It's the mici layout at **536×240**; `SCALE=2` (env) doubles the native
+  canvas to 1072×480 — resizing the OS window does *not* scale the fixed raylib canvas, it just
+  black-pads. `BIG=1` switches to the large tici layout.
+- The `wifi_manager.py` "Object path ('T') must start with /" DBus spam happens here too and is
+  the same harmless caught-and-retried noise (NetworkManager needn't even be running).
+- `pkill -f "tools/replay/replay"` **matches the invoking shell** (the pattern is in its own
+  command line) and kills your own command — use the `pkill -f "[t]ools/replay/replay"` bracket
+  trick, or kill by PID. This bites constantly when scripting the stack.
+- Ad-hoc `cereal` imports need the package path: `from openpilot.cereal import messaging`, run
+  from the repo root with the venv active.
+
+To run the whole onroad stack against a route (model + planner + EKF + UI), use
+`route-replay`'s `scripts/run_stack.sh` — it encodes the launch order and the gotchas below.
 
 ## Repo layout
 
