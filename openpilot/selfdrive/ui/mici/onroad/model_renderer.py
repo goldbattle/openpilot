@@ -138,10 +138,11 @@ class ModelRenderer(Widget):
         self._update_leads(radar_state, path_x_array)
       self._transform_dirty = False
 
-    # Draw elements (hide when disengaged)
-    if ui_state.status != UIStatus.DISENGAGED:
-      self._draw_lane_lines()
-      self._draw_path(sm)
+    # recorder fork: draw the model overlay even when disengaged. A passive/dashcam port is
+    # never engaged, so upstream's engaged-only gate hid the path and lane lines for the whole
+    # drive. The draw code already styles the disengaged state (grey lanes, no-throttle path).
+    self._draw_lane_lines()
+    self._draw_path(sm)
 
     # if render_lead_indicator and radar_state:
     #   self._draw_lead_indicator()
