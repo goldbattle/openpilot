@@ -214,7 +214,10 @@ def upload_file(host: str, share_path: str, username: str, password: str,
       if progress_cb:
         progress_cb(rf.size, rf.size)
       return
-  except OSError:
+  except Exception:
+    # This is only a skip-the-reupload optimization, so nothing it raises may abort the file:
+    # OSError == "not there yet", but a dropped session throws a non-OSError auth error here,
+    # and that must fall through to the real upload (which re-registers), not fail the file.
     pass
 
   smbclient.makedirs(remote_dir, exist_ok=True)
@@ -265,21 +268,37 @@ def run(host: str, share_path: str, username: str, password: str, routes: list[R
     if on_error:
       on_error(SMB_UNAVAILABLE)
     return
-  try:
-    session = smbclient.register_session(host, username=username or "", password=password or "", connection_timeout=SESSION_TIMEOUT)
-  except Exception as e:
-    # runs on a daemon thread -- an uncaught exception here would just silently kill it
-    cloudlog.exception("smb register_session failed")
-    if on_error:
-      on_error(str(e))
-    return
-  _cap_socket_timeout(session)
 
   backoff = INITIAL_BACKOFF
+  session_ok = False
   while not stop_event.is_set():
     if not network_ok():
       stop_event.wait(NO_NETWORK_POLL)
       continue
+
+    # smbclient caches one session per host and reuses it for stat/open/rename. If that
+    # connection dies mid-run (idle drop, our SOCKET_TIMEOUT firing on a stalled write, a
+    # Wi-Fi blip) smbclient silently reconnects with NO credentials, so every remaining file
+    # auth-fails and the route freezes partway -- forever, because run() used to register only
+    # once. Rebuild the session (dropping the dead cached connection first) whenever the last
+    # pass had a failure, so a transient drop heals instead of poisoning the whole worker.
+    if not session_ok:
+      try:
+        smbclient.reset_connection_cache()
+      except Exception:
+        pass
+      try:
+        session = smbclient.register_session(host, username=username or "", password=password or "", connection_timeout=SESSION_TIMEOUT)
+        _cap_socket_timeout(session)
+        session_ok = True
+      except Exception as e:
+        # runs on a daemon thread -- an uncaught exception here would just silently kill it
+        cloudlog.exception("smb register_session failed")
+        if on_error:
+          on_error(str(e))
+        backoff = min(backoff * 2, MAX_BACKOFF)
+        stop_event.wait(backoff)
+        continue
 
     uploaded = failed = 0
     for route, rf in next_file_to_upload(routes):
@@ -297,8 +316,11 @@ def run(host: str, share_path: str, username: str, password: str, routes: list[R
 
     if failed == 0:
       return  # everything drained
-    # Some file(s) failed. Back off before re-passing, but reset the backoff if we still
-    # made forward progress this pass so a lone poison file doesn't slow the good ones.
+    # Some file(s) failed. A failure may just be a poison file, or it may be a dead session --
+    # can't tell them apart cheaply, so rebuild the session before the next pass either way.
+    session_ok = False
+    # Back off before re-passing, but reset the backoff if we still made forward progress this
+    # pass so a lone poison file doesn't slow the good ones.
     backoff = INITIAL_BACKOFF if uploaded else min(backoff * 2, MAX_BACKOFF)
     stop_event.wait(backoff)
 
