@@ -112,6 +112,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"SecOCKey", {PERSISTENT | DONT_LOG, STRING}},
     {"ShowDebugInfo", {PERSISTENT, BOOL}},
     {"RouteCount", {PERSISTENT, INT, "0"}},
+    // recorder fork: force the device onroad (records with no ignition) for bench/calibration capture
+    {"ForceOnroad", {CLEAR_ON_MANAGER_START, BOOL}},
     // recorder fork: SMB route upload settings
     {"SmbHost", {PERSISTENT, STRING}},
     {"SmbSharePath", {PERSISTENT, STRING}},

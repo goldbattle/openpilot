@@ -61,6 +61,14 @@ class DeveloperLayoutMici(NavScroller):
         return
       gui_app.push_widget(dlg)
 
+    # recorder fork: start/stop a recording (forces the device onroad) with no ignition, e.g. USB
+    # powered on the bench for a camera-calibration capture. Disabled while genuinely onroad.
+    self._recording = ui_state.params.get_bool("ForceOnroad")
+    self._record_btn = BigButton("start recording", "")
+    self._record_btn.set_click_callback(self._on_record_toggle)
+    self._record_btn.set_enabled(lambda: self._recording or ui_state.is_offroad())
+    self._refresh_record_btn()
+
     txt_ssh = gui_app.texture("icons_mici/settings/developer/ssh.png", 56, 64)
     github_username = ui_state.params.get("GithubUsername") or ""
     self._ssh_keys_btn = BigButton("SSH keys", "Not set" if not github_username else github_username, icon=txt_ssh)
@@ -87,6 +95,7 @@ class DeveloperLayoutMici(NavScroller):
                                                                                gui_app.set_show_fps(checked)))
 
     self._scroller.add_widgets([
+      self._record_btn,
       self._adb_toggle,
       self._ssh_toggle,
       self._ssh_keys_btn,
@@ -138,7 +147,19 @@ class DeveloperLayoutMici(NavScroller):
     super().show_event()
     self._update_toggles()
 
+  def _on_record_toggle(self):
+    self._recording = not self._recording
+    ui_state.params.put_bool("ForceOnroad", self._recording, block=True)
+    self._refresh_record_btn()
+
+  def _refresh_record_btn(self):
+    self._record_btn.set_text("stop recording" if self._recording else "start recording")
+
   def _update_toggles(self):
+    # recorder fork: mirror ForceOnroad in case it was cleared externally (e.g. manager restart)
+    self._recording = ui_state.params.get_bool("ForceOnroad")
+    self._refresh_record_btn()
+
     ui_state.update_params()
 
     # CP gating
