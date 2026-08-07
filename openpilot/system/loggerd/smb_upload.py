@@ -11,6 +11,7 @@ import socket
 import sys
 import threading
 import time
+import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 
@@ -203,7 +204,12 @@ def upload_file(host: str, share_path: str, username: str, password: str,
 
   remote_dir, remote_name = _unc_path(host, share_path, os.path.dirname(rf.rel_name)), os.path.basename(rf.rel_name)
   final_path = f"{remote_dir}\\{remote_name}"
-  part_path = f"{final_path}{PART_SUFFIX}"
+  # Unique temp name per attempt, NOT a fixed '<name>.part'. An interrupted upload can leave a
+  # half-written .part that the Samba server still holds an open handle on; reusing that fixed
+  # name then fails forever with STATUS_SHARING_VIOLATION (can neither overwrite nor delete it),
+  # wedging the whole route. A fresh name sidesteps the orphan -- it just sits there as harmless
+  # clutter -- and we rename our temp onto the final name, which isn't the locked file.
+  part_path = f"{final_path}.{uuid.uuid4().hex[:8]}{PART_SUFFIX}"
 
   # Recovery check: a previous run may have finished the write + rename but crashed
   # before the local xattr got set. Treat a same-size final file as already done
@@ -222,17 +228,25 @@ def upload_file(host: str, share_path: str, username: str, password: str,
 
   smbclient.makedirs(remote_dir, exist_ok=True)
 
-  # A stale .part from an interrupted previous attempt is just overwritten from
-  # scratch below (mode='wb') -- no byte-range resume.
+  # No byte-range resume -- the whole file is (re)sent each attempt.
   # ponytail: segments are at most a couple minutes of video, re-sending one file
   # is cheap; upgrade to range-resume only if that stops being true.
   written = 0
-  with open(rf.path, 'rb') as local_f, smbclient.open_file(part_path, mode='wb') as remote_f:
-    while chunk := local_f.read(CHUNK_SIZE):
-      remote_f.write(chunk)
-      written += len(chunk)
-      if progress_cb:
-        progress_cb(written, rf.size)
+  try:
+    with open(rf.path, 'rb') as local_f, smbclient.open_file(part_path, mode='wb') as remote_f:
+      while chunk := local_f.read(CHUNK_SIZE):
+        remote_f.write(chunk)
+        written += len(chunk)
+        if progress_cb:
+          progress_cb(written, rf.size)
+  except BaseException:
+    # Our own temp (unique name) -- if the write failed partway, drop it so failed attempts
+    # don't litter the share. It isn't locked by anyone else, so this remove actually works.
+    try:
+      smbclient.remove(part_path)
+    except Exception:
+      pass
+    raise
 
   try:
     smbclient.remove(final_path)

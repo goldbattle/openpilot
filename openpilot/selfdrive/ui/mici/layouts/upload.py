@@ -220,6 +220,11 @@ class UploadController:
     self._last_error: str | None = None
     self._next_auto = 0.0
     self._scan_thread: threading.Thread | None = None
+    # wifi_ok reads ui_state.sm, which is only safe from the UI thread. The upload worker
+    # needs that gate too, but must not touch sm cross-thread -- a torn read returned
+    # networkType=none, which broke the worker's drain loop and stalled uploads. So the UI
+    # thread caches the result here (plain-bool read is atomic) and the worker reads the cache.
+    self._wifi_ok_cached = False
 
   def _ensure_scanning(self) -> None:
     """Start the scan thread lazily, from whichever process actually renders.
@@ -256,9 +261,10 @@ class UploadController:
     _update_state, so it keeps running no matter which page is on screen -- and from the
     UI thread, so reading ui_state.sm (wifi_ok) doesn't race the thread that updates it."""
     self.update()
+    self._wifi_ok_cached = self.wifi_ok()  # cache on the UI thread for the worker (see __init__)
     if should_auto_upload(uploading=self.is_uploading(),
                           onroad=ui_state.started,
-                          wifi_ok=self.wifi_ok(),
+                          wifi_ok=self._wifi_ok_cached,
                           configured=bool(self._params.get("SmbHost") and self._params.get("SmbSharePath")),
                           available=smb_upload.available(),
                           has_pending=any(not r.is_done for r in self._routes),
@@ -317,7 +323,8 @@ class UploadController:
       self._last_error = msg
 
     def worker():
-      smb_upload.run(host, share, username, password, self._routes, self.wifi_ok,
+      # network_ok reads the UI-thread cache, never sm directly (see __init__)
+      smb_upload.run(host, share, username, password, self._routes, lambda: self._wifi_ok_cached,
                      progress_cb, self._stop_event, on_error=on_error)
 
     self._upload_thread = threading.Thread(target=worker, daemon=True)
