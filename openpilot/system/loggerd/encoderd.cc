@@ -144,7 +144,7 @@ void encoder_thread(EncoderdState *s, const LogCameraInfo &cam_info) {
 }
 
 template <size_t N>
-void encoderd_thread(const LogCameraInfo (&cameras)[N]) {
+void encoderd_thread(const LogCameraInfo (&cameras)[N], bool one_camera_only = false) {
   EncoderdState s;
 
   std::set<VisionStreamType> streams;
@@ -159,6 +159,8 @@ void encoderd_thread(const LogCameraInfo (&cameras)[N]) {
   if (!streams.empty()) {
     std::vector<std::thread> encoder_threads;
     for (auto stream : streams) {
+      // recorder fork: skip the cameras this route isn't recording (see camera_recorded)
+      if (one_camera_only && !camera_recorded(stream)) continue;
       auto it = std::find_if(std::begin(cameras), std::end(cameras),
                              [stream](auto &cam) { return cam.stream_type == stream; });
       assert(it != std::end(cameras));
@@ -186,7 +188,7 @@ int main(int argc, char* argv[]) {
       LOGE("Argument '%s' is not supported", arg1.c_str());
     }
   } else {
-    encoderd_thread(cameras_logged);
+    encoderd_thread(cameras_logged, true);
   }
   return 0;
 }

@@ -262,7 +262,10 @@ void loggerd_thread() {
   for (const auto &cam : cameras_logged) {
     for (const auto &encoder_info : cam.encoder_infos) {
       encoder_infos_dict[encoder_info.publish_name] = encoder_info;
-      s.max_waiting++;
+      // recorder fork: only wait on the camera we're actually recording. Counting the skipped
+      // encoders here would leave ready_to_rotate short of max_waiting forever, so every
+      // segment would rotate on the 1.2x-too-long timeout instead of on a frame boundary.
+      if (camera_recorded(cam.stream_type)) s.max_waiting++;
     }
   }
 

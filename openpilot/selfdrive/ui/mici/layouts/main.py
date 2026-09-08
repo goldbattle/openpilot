@@ -1,4 +1,5 @@
 import pyray as rl
+from msgq.visionipc import VisionStreamType
 from openpilot.selfdrive.ui.mici.layouts.home import MiciHomeLayout
 from openpilot.selfdrive.ui.mici.layouts.settings.settings import SettingsLayout
 from openpilot.selfdrive.ui.mici.layouts.upload import upload_controller
@@ -29,22 +30,30 @@ class MiciMainLayout(Scroller):
     self._home_layout = MiciHomeLayout()
     self._alerts_layout = MiciOffroadAlerts()
     self._settings_layout = SettingsLayout()
-    self._car_onroad_layout = AugmentedRoadView()
-    # recorder fork: driver camera as a page rather than an offroad-only settings preview --
-    # this is a recorder, so seeing what the dcamera is capturing matters mid-drive
+    # recorder fork: one page per camera, swipeable, instead of upstream's single road view
+    # that switched itself between road and wide by speed. Only one camera is recorded at a
+    # time here, so which one you're looking at has to be a deliberate choice, and the driver
+    # camera is a page rather than an offroad-only settings preview because on a recorder
+    # seeing what the dcamera is capturing matters mid-drive.
+    self._road_onroad_layout = AugmentedRoadView(VisionStreamType.VISION_STREAM_ROAD)
+    self._wide_onroad_layout = AugmentedRoadView(VisionStreamType.VISION_STREAM_WIDE_ROAD)
     self._driver_onroad_layout = OnroadDriverView()
+    self._camera_layouts = {"road": self._road_onroad_layout,
+                            "wide": self._wide_onroad_layout,
+                            "driver": self._driver_onroad_layout}
     self._body_onroad_layout = BodyLayout()
 
     # Initialize widget rects
     for widget in (self._home_layout, self._alerts_layout, self._settings_layout,
-                   self._car_onroad_layout, self._driver_onroad_layout, self._body_onroad_layout):
+                   *self._camera_layouts.values(), self._body_onroad_layout):
       # TODO: set parent rect and use it if never passed rect from render (like in Scroller)
       widget.set_rect(rl.Rectangle(0, 0, gui_app.width, gui_app.height))
 
     self._scroller.add_widgets([
       self._alerts_layout,
       self._home_layout,
-      self._car_onroad_layout,
+      self._road_onroad_layout,
+      self._wide_onroad_layout,
       self._driver_onroad_layout,
       self._body_onroad_layout,
     ])
@@ -63,8 +72,12 @@ class MiciMainLayout(Scroller):
 
   @property
   def _onroad_layout(self) -> Widget:
-    # For scroll_to
-    return self._body_onroad_layout if ui_state.is_body else self._car_onroad_layout
+    # For scroll_to. recorder fork: land on the camera that's actually being recorded -- the
+    # reason to jump here on the onroad edge is to see what's being captured. Only read on
+    # transitions and timeouts, never per frame.
+    if ui_state.is_body:
+      return self._body_onroad_layout
+    return self._camera_layouts.get(ui_state.record_camera, self._road_onroad_layout)
 
   def _setup_callbacks(self):
     self._home_layout.set_callbacks(
@@ -73,7 +86,7 @@ class MiciMainLayout(Scroller):
       alert_count_callback=self._alerts_layout.active_alerts,
       max_severity_callback=self._alerts_layout.max_severity,
     )
-    for layout in (self._car_onroad_layout, self._body_onroad_layout):
+    for layout in (self._road_onroad_layout, self._wide_onroad_layout, self._body_onroad_layout):
       layout.set_click_callback(lambda: self._scroll_to(self._home_layout))
 
     device.add_interactive_timeout_callback(self._on_interactive_timeout)
@@ -146,6 +159,6 @@ class MiciMainLayout(Scroller):
       self._scroll_to(self._home_layout)
 
   def _on_body_changed(self):
-    self._car_onroad_layout.set_visible(not ui_state.is_body)
-    self._driver_onroad_layout.set_visible(not ui_state.is_body)
+    for layout in self._camera_layouts.values():
+      layout.set_visible(not ui_state.is_body)
     self._body_onroad_layout.set_visible(ui_state.is_body)

@@ -114,6 +114,9 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"RouteCount", {PERSISTENT, INT, "0"}},
     // recorder fork: force the device onroad (records with no ignition) for bench/calibration capture
     {"ForceOnroad", {CLEAR_ON_MANAGER_START, BOOL}},
+    // recorder fork: which single camera to encode -- "road" | "wide" | "driver". Persistent so
+    // the choice survives a reboot; ForceOnroad above is not, so recording never auto-resumes.
+    {"RecordCamera", {PERSISTENT, STRING}},
     // recorder fork: SMB route upload settings
     {"SmbHost", {PERSISTENT, STRING}},
     {"SmbSharePath", {PERSISTENT, STRING}},

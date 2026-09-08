@@ -274,7 +274,7 @@ class OnroadDriverView(BaseDriverCameraDialog):
       rl.draw_rectangle_rec(rect, rl.BLACK)
       return
     super()._render(rect)
-    status_line.render(rect)
+    status_line.render(rect, "driver")
 
 
 class DriverCameraDialog(NavWidget, BaseDriverCameraDialog):

@@ -78,6 +78,18 @@ public:
   std::vector<EncoderInfo> encoder_infos;
 };
 
+// recorder fork: record exactly one camera per route. RecordCamera is "road" | "wide" |
+// "driver"; unset means road, so the behaviour is the same whether or not the UI has ever
+// written the param. Read once per process, which is what we want: loggerd and encoderd are
+// both onroad-gated, so they restart for every route and the choice is latched for its whole
+// length -- it can never change under a half-written segment.
+inline bool camera_recorded(VisionStreamType t) {
+  static const std::string sel = Params().get("RecordCamera");
+  if (sel == "wide") return t == VISION_STREAM_WIDE_ROAD;
+  if (sel == "driver") return t == VISION_STREAM_DRIVER;
+  return t == VISION_STREAM_ROAD;
+}
+
 const EncoderInfo main_road_encoder_info = {
   .publish_name = "roadEncodeData",
   .thumbnail_name = "thumbnail",
@@ -96,7 +108,10 @@ const EncoderInfo main_wide_road_encoder_info = {
 const EncoderInfo main_driver_encoder_info = {
   .publish_name = "driverEncodeData",
   .filename = "dcamera.hevc",
-  .record = Params().getBool("RecordFront"),
+  // recorder fork: also record it when it is the explicitly selected camera, so picking
+  // "driver" in the recording menu is enough on its own (RecordFront is the upstream
+  // always-record-the-driver-cam setting and stays independent of that choice).
+  .record = Params().getBool("RecordFront") || Params().get("RecordCamera") == "driver",
   .get_settings = [](int in_width){return EncoderSettings::MainEncoderSettings(in_width);},
   INIT_ENCODE_FUNCTIONS(DriverEncode),
 };
