@@ -7,8 +7,8 @@ which defaults to road when unset) and the run/stop switch is `ForceOnroad` (rea
 which drives the whole onroad transition -- so IMU, GPS, CAN and the rlog are logged for every
 capture regardless of which camera is picked).
 
-Only the *encoders* are filtered, not camerad: all three sensors keep streaming, so every
-camera page still shows live video and you can watch any of them while one is being written.
+Only the *encoders* are filtered, not camerad: all three sensors keep streaming while a
+recording runs, which is what lets the preview at the end of this page show any of them.
 """
 import pyray as rl
 from collections.abc import Callable
@@ -16,14 +16,13 @@ from msgq.visionipc import VisionStreamType
 
 from openpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
 from openpilot.selfdrive.ui.mici.onroad import status_line
-from openpilot.selfdrive.ui.mici.widgets.button import BigCircleButton, BigCircleToggle
+from openpilot.selfdrive.ui.mici.widgets.button import BigButton, BigCircleButton, BigCircleToggle
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.label import gui_label, UnifiedLabel
 from openpilot.system.ui.widgets.scroller import NavScroller
 
-# left to right, matching the onroad camera pages in main.py
 CAMERAS = ("road", "wide", "driver")
 DEFAULT_CAMERA = CAMERAS[0]
 STREAMS = {"road": VisionStreamType.VISION_STREAM_ROAD,
@@ -65,22 +64,24 @@ class LabelCircleToggle(BigCircleToggle):
               color=rl.Color(255, 255, 255, int(255 * alpha)))
 
 
-class RecordCircleButton(LabelCircleToggle):
-  """The developer-menu entry point. Same circle, press animation and status light as the
-  adb/ssh buttons next to it, with a record glyph instead of a word so it reads as a button
-  at a glance: red dot when idle, white square while a recording is running."""
+class RecordingTileButton(BigButton):
+  """The developer-menu entry point: one rectangle filling the page, rather than a circle
+  sitting among the adb/ssh toggles. BigButton's background is a fixed-size 402x180 texture,
+  so this draws a rounded rect scaled to the widget instead and keeps everything else
+  (label layout, press bounce). No status light -- each camera in the page behind it carries
+  its own, and a second indicator here would just be another thing to keep in sync."""
+  MARGIN = 20
 
-  def __init__(self, on_click: Callable[[], None], checked: Callable[[], bool]):
-    super().__init__("", on_click, checked)
+  def __init__(self, on_click: Callable[[], None]):
+    super().__init__("recording")
+    self.set_rect(rl.Rectangle(0, 0, gui_app.width - self.MARGIN * 2, gui_app.height - self.MARGIN * 2))
+    self.set_click_callback(on_click)
 
-  def _draw_content(self, btn_y: float):
-    super()._draw_content(btn_y)  # the light; the label is empty
-    cx, cy = int(self._rect.x + self._rect.width / 2), int(btn_y + self._rect.height / 2 + 10)
-    alpha = 255 if self.enabled else 90
-    if self._checked:
-      rl.draw_rectangle(cx - 22, cy - 22, 44, 44, rl.Color(255, 255, 255, alpha))
-    else:
-      rl.draw_circle(cx, cy, 32, rl.Color(255, 60, 60, alpha))
+  def _render(self, _):
+    _, btn_x, btn_y, scale = self._handle_background()
+    scaled = rl.Rectangle(btn_x, btn_y, self._rect.width * scale, self._rect.height * scale)
+    rl.draw_rectangle_rounded(scaled, 0.12, 14, rl.Color(255, 255, 255, int(255 * 0.08)))
+    self._draw_content(btn_y)
 
 
 class RecordingPreview(Widget):
@@ -96,8 +97,8 @@ class RecordingPreview(Widget):
     self._camera = DEFAULT_CAMERA
     self._view = self._child(CameraView("camerad", STREAMS[DEFAULT_CAMERA]))
     self._view._set_placeholder_color(rl.Color(20, 20, 20, 255))
-    # camerad only runs onroad, so there is nothing to preview until a recording starts
-    self._idle_label = UnifiedLabel("start a recording\nto see the camera", 32, FontWeight.DISPLAY,
+    # camerad only runs while a recording is going, so the text below stands in for it
+    self._idle_label = UnifiedLabel("", 32, FontWeight.DISPLAY,
                                     text_color=rl.Color(255, 255, 255, int(255 * 0.9)),
                                     alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER,
                                     alignment_vertical=rl.GuiTextAlignmentVertical.TEXT_ALIGN_MIDDLE)
@@ -111,6 +112,10 @@ class RecordingPreview(Widget):
   def _render(self, rect: rl.Rectangle):
     rl.draw_rectangle_rounded(rect, 0.15, 10, rl.BLACK)
     if not ui_state.started:
+      # camerad is started by the onroad transition, which takes a couple of seconds after the
+      # tap -- say so, or the wait looks like the preview is broken
+      self._idle_label.set_text("starting camera..." if ui_state.force_onroad else
+                                "pick a camera to\nstart recording")
       self._idle_label.render(rect)
       return
 
@@ -131,7 +136,8 @@ class RecordingLayoutMici(NavScroller):
   def __init__(self):
     super().__init__()
     # refreshed once per frame in _update_state rather than per button per draw: three
-    # buttons each asking the light and the enabled state is six param file reads a frame
+    # buttons each asking the light and the enabled state is six param file reads a frame.
+    # Read straight from params, not ui_state's 5Hz cache, so a tap lights its button now.
     self._recording = False
     self._camera = DEFAULT_CAMERA
     self._preview = RecordingPreview()
@@ -159,8 +165,8 @@ class RecordingLayoutMici(NavScroller):
       return
 
     # order matters: encoderd latches RecordCamera when it starts, and ForceOnroad is what
-    # starts it. No navigation to do here -- MiciMainLayout already pops to the onroad view on
-    # the offroad->onroad edge, and picks the page for the camera we just selected.
+    # starts it. Deliberately no navigation -- the point is to stay here and watch the preview,
+    # and MiciMainLayout skips its usual onroad pop while ForceOnroad is set.
     ui_state.params.put("RecordCamera", cam, block=True)
     ui_state.params.put_bool("ForceOnroad", True, block=True)
     self._camera, self._recording = cam, True

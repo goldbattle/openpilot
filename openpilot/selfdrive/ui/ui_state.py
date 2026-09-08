@@ -82,10 +82,10 @@ class UIState:
     self.usbgpu_compiled: bool = self.params.get_bool("UsbGpuCompiled")
     self.started: bool = False
     self.ignition: bool = False
-    # recorder fork: which single camera this route encodes -- see loggerd.h camera_recorded().
-    # Read on the existing 5Hz params thread so the onroad pages can label themselves without
-    # a per-frame file read.
-    self.record_camera: str = ""
+    # recorder fork: a recording started from the recording menu rather than by ignition.
+    # Read on the existing 5Hz params thread -- the nav-stack tick below consults it every
+    # frame and must not do a param file read to do so.
+    self.force_onroad: bool = False
     self.recording_audio: bool = False
     self.panda_type: log.PandaState.PandaType = log.PandaState.PandaType.unknown
     self.personality: log.LongitudinalPersonality = log.LongitudinalPersonality.standard
@@ -206,7 +206,7 @@ class UIState:
       else:
         self.has_longitudinal_control = self.CP.openpilotLongitudinalControl
 
-    self.record_camera = self.params.get("RecordCamera") or ""
+    self.force_onroad = self.params.get_bool("ForceOnroad")
     self.recording_audio = self.params.get_bool("RecordAudio") and self.started
     self.is_metric = self.params.get_bool("IsMetric")
     self.always_on_dm = self.params.get_bool("AlwaysOnDM")
@@ -318,7 +318,11 @@ class Device:
         callback()
     self._prev_timed_out = interaction_timeout
 
-    self._set_awake(ui_state.ignition or not interaction_timeout or PC)
+    # recorder fork: never blank the screen during a menu-started recording. ui_state.ignition
+    # comes from the panda and stays false on a bench capture, so without this the screen goes
+    # dark mid-record -- indistinguishable from the recording having stopped, and it hides the
+    # live preview the user opened the menu to watch.
+    self._set_awake(ui_state.ignition or ui_state.force_onroad or not interaction_timeout or PC)
 
   def _set_awake(self, on: bool):
     if on != self._awake:

@@ -7,7 +7,7 @@ from openpilot.system.ui.lib.application import gui_app
 from openpilot.selfdrive.ui.layouts.settings.common import restart_needed_callback
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.widgets.ssh_key import SshKeyFetcher
-from openpilot.selfdrive.ui.mici.layouts.settings.recording import RecordingLayoutMici, RecordCircleButton
+from openpilot.selfdrive.ui.mici.layouts.settings.recording import RecordingLayoutMici, RecordingTileButton
 
 
 class AlphaLongConfirmPage(NavScroller):
@@ -62,13 +62,11 @@ class DeveloperLayoutMici(NavScroller):
         return
       gui_app.push_widget(dlg)
 
-    # recorder fork: opens the recording page (pick a camera, start/stop). A circle button
-    # like adb/ssh below rather than a rectangle, and its light shows whether a recording is
-    # running -- so the state is visible from the developer menu without opening the page.
-    self._recording = ui_state.params.get_bool("ForceOnroad")
+    # recorder fork: opens the recording page (pick a camera, start/stop, live preview).
+    # A full-page tile rather than a circle among the toggles -- it is a page, not a switch,
+    # and the running/stopped state lives on the per-camera buttons inside it.
     self._recording_panel = RecordingLayoutMici()
-    self._record_btn = RecordCircleButton(lambda: gui_app.push_widget(self._recording_panel),
-                                          lambda: self._recording)
+    self._record_btn = RecordingTileButton(lambda: gui_app.push_widget(self._recording_panel))
 
     txt_ssh = gui_app.texture("icons_mici/settings/developer/ssh.png", 56, 64)
     github_username = ui_state.params.get("GithubUsername") or ""
@@ -147,8 +145,6 @@ class DeveloperLayoutMici(NavScroller):
   def _update_state(self):
     super()._update_state()
     self._ssh_fetcher.update()
-    # recorder fork: mirror ForceOnroad -- the recording page and manager both change it
-    self._recording = ui_state.params.get_bool("ForceOnroad")
 
   def _update_toggles(self):
     ui_state.update_params()

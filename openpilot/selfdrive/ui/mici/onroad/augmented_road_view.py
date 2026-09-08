@@ -24,6 +24,9 @@ WIDE_CAM = VisionStreamType.VISION_STREAM_WIDE_ROAD
 DEFAULT_DEVICE_CAMERA = DEVICE_CAMERAS["tici", "ar0231"]
 
 
+WIDE_CAM_MAX_SPEED = 5.0  # m/s (10 mph)
+ROAD_CAM_MIN_SPEED = 10  # m/s (25 mph)
+
 CAM_Y_OFFSET = 20
 
 
@@ -36,16 +39,11 @@ class AugmentedRoadView(CameraView):
     self.view_from_calib = view_frame_from_device_frame.copy()
     self.view_from_wide_calib = view_frame_from_device_frame.copy()
 
-    # recorder fork: the page's own stream is fixed at construction -- main.py builds one
-    # AugmentedRoadView per camera and you swipe between them. Upstream switched this single
-    # view between road and wide by speed; picking which camera to look at is a manual choice
-    # on a recorder, and the auto-switch made it impossible to hold either view.
-    self._cam_name = "wide" if stream_type == WIDE_CAM else "road"
-
     self._matrix_cache_key: tuple | None = None
     self._cached_matrix: np.ndarray | None = None
     self._content_rect = rl.Rectangle()
     self._last_click_time = 0.0
+    self._last_streams_query = 0.0
 
     self._model_renderer = ModelRenderer()
     self._hud_renderer = HudRenderer()
@@ -76,6 +74,8 @@ class AugmentedRoadView(CameraView):
       rl.draw_rectangle_rec(self.rect, rl.BLACK)
       self._offroad_label.render(self._rect)
       return
+
+    self._switch_stream_if_needed(ui_state.sm)
 
     # Update calibration before rendering
     self._update_calibration()
@@ -122,7 +122,7 @@ class AugmentedRoadView(CameraView):
     self._hud_renderer.render(self._content_rect)
 
     # recorder fork: capture status, same line as the driver view
-    status_line.render(self._content_rect, self._cam_name)
+    status_line.render(self._content_rect)
 
     # Draw fake rounded border
     rl.draw_rectangle_rounded_lines_ex(self._content_rect, 0.2 * 1.02, 10, 50, rl.BLACK)
@@ -133,6 +133,37 @@ class AugmentedRoadView(CameraView):
     # Custom UI extension point - add custom overlays here
     # Use self._content_rect for positioning within camera bounds
     self._confidence_ball.render(self.rect)
+
+  def _switch_stream_if_needed(self, sm):
+    # recorder fork: CameraView captures available_streams once, at connect time. camerad
+    # brings the wide camera up a beat after the road camera, so a road view that connected
+    # first cached a list without WIDE and never saw it appear -- which stuck us on the road
+    # cam for the whole drive even at a standstill. Re-query (throttled to 1s) until WIDE shows
+    # up; once it does, the condition below is false and we stop querying. Verified on device:
+    # camerad publishes ROAD, DRIVER, WIDE, with WIDE landing ~2s after the others.
+    if (WIDE_CAM not in self.available_streams and self.client is not None
+        and self.client.is_connected() and rl.get_time() - self._last_streams_query > 1.0):
+      self._last_streams_query = rl.get_time()
+      self.available_streams = self.client.available_streams(self._name, block=False)
+
+    # dropped upstream's `selfdriveState.experimentalMode and` gate. That tied the low-speed
+    # wide view to a mode you can only enable with longitudinal control, which a dashcamOnly car
+    # never has -- so the wide camera was unreachable here. Nothing about picking which recorded
+    # stream to *look at* depends on being able to drive the car.
+    if WIDE_CAM in self.available_streams:
+      v_ego = sm['carState'].vEgo
+      if v_ego < WIDE_CAM_MAX_SPEED:
+        target = WIDE_CAM
+      elif v_ego > ROAD_CAM_MIN_SPEED:
+        target = ROAD_CAM
+      else:
+        # Hysteresis zone - keep current stream
+        target = self.stream_type
+    else:
+      target = ROAD_CAM
+
+    if self.stream_type != target:
+      self.switch_stream(target)
 
   def _update_calibration(self):
     # Update device camera if not already set

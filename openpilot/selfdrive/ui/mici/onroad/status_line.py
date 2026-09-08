@@ -91,27 +91,20 @@ def sensor_status() -> str:
   return "   ".join(parts)
 
 
-def is_recorded(cam: str) -> bool:
-  """Whether `cam` is the camera loggerd is encoding this route. Mirrors loggerd.h
-  `camera_recorded`, including its unset-means-road default."""
-  return cam == (ui_state.record_camera or "road")
-
-
 def render(rect: rl.Rectangle, cam: str = "") -> None:
   """Draw along the bottom of `rect`. Bottom rather than top because both pages already
   contend for the top corners -- the set-speed bubble and dmoji on the road view, the eye
   icons and awareness readout on the driver view.
 
-  `cam` is this page's stream ("road"/"wide"/"driver"). It is named on the left so you can tell
-  the three swipeable camera pages apart, and the REC counter on the right is drawn only on the
-  page whose camera is actually being encoded -- only one camera is recorded at a time, so
-  showing REC on all three would be a lie on two of them."""
+  `cam` names the stream being shown ("road"/"wide"/"driver") and is only passed by the
+  recording menu's preview, where which camera you are looking at is the whole point. The
+  onroad pages pass nothing and get the plain line."""
   y = rect.y + rect.height - FONT_SIZE - 6
   status = f"{cam.upper()}   {sensor_status()}" if cam else sensor_status()
   gui_label(rl.Rectangle(rect.x + PAD, y, rect.width - 2 * PAD, FONT_SIZE + 2), status,
             font_size=FONT_SIZE, font_weight=FontWeight.BOLD, color=rl.Color(255, 255, 255, 235))
 
-  elapsed = onroad_elapsed_str() if is_recorded(cam) else ""
+  elapsed = onroad_elapsed_str()
   if not elapsed:
     return
   # "REC h:mm:ss" right-aligned to the right edge. Right-aligned (not a fixed 96px box, which
