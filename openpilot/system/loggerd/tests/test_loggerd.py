@@ -31,7 +31,15 @@ CEREAL_SERVICES = [f for f in log.Event.schema.union_fields if f in SERVICE_LIST
                    and SERVICE_LIST[f].should_log and "encode" not in f.lower()]
 
 
+# recorder fork: which .hevc each RecordCamera setting is expected to produce (loggerd.h
+# camera_recorded). Only one camera is encoded per route, so the other two are absent.
+CAMERA_FILES = {"road": "fcamera.hevc", "wide": "ecamera.hevc", "driver": "dcamera.hevc"}
+
+
 class TestLoggerd:
+  # note: openpilot_function_fixture gives every test its own params prefix, so an unset
+  # RecordCamera (i.e. road, the default) is what a test sees unless it sets one itself
+
   def _get_latest_log_dir(self):
     log_dirs = sorted(Path(Paths.log_root()).iterdir(), key=lambda f: f.stat().st_mtime)
     return log_dirs[-1]
@@ -194,9 +202,8 @@ class TestLoggerd:
 
   @pytest.mark.xdist_group("camera_encoder_tests")  # setting xdist group ensures tests are run in same worker, prevents encoderd from crashing
   def test_rotation(self):
-    Params().put("RecordFront", True, block=True)
-
-    expected_files = {"rlog.zst", "qlog.zst", "qcamera.ts", "fcamera.hevc", "dcamera.hevc", "ecamera.hevc"}
+    # recorder fork: one camera per route, so only the road files (main + qcam) are expected
+    expected_files = {"rlog.zst", "qlog.zst", "qcamera.ts", "fcamera.hevc"}
 
     num_segs = random.randint(2, 3)
     length = random.randint(4, 5) # H264 encoder uses 40 lookahead frames and does B-frame reordering, so minimum 3 seconds before qcam output
@@ -312,15 +319,18 @@ class TestLoggerd:
     assert getxattr(segment_dir, PRESERVE_ATTR_NAME) is None
 
   @pytest.mark.xdist_group("camera_encoder_tests")  # setting xdist group ensures tests are run in same worker, prevents encoderd from crashing
-  @pytest.mark.parametrize("record_front", [True, False])
-  def test_record_front(self, record_front):
-    params = Params()
-    params.put_bool("RecordFront", record_front, block=True)
+  @pytest.mark.parametrize("camera", list(CAMERA_FILES))
+  def test_record_camera(self, camera):
+    """recorder fork: RecordCamera selects exactly one camera to encode. All three streams are
+    published below regardless, so this covers both halves of the change -- encoderd not
+    spawning the other encoders, and loggerd not waiting on them to rotate a segment."""
+    Params().put("RecordCamera", camera, block=True)
 
     self._publish_camera_and_audio_messages()
 
-    dcamera_hevc_exists = os.path.exists(os.path.join(self._get_latest_log_dir(), 'dcamera.hevc'))
-    assert dcamera_hevc_exists == record_front
+    logged = {f.name for f in self._get_latest_log_dir().iterdir() if f.is_file()}
+    assert CAMERA_FILES[camera] in logged
+    assert not (set(CAMERA_FILES.values()) - {CAMERA_FILES[camera]}) & logged, logged
 
   @pytest.mark.xdist_group("camera_encoder_tests")  # setting xdist group ensures tests are run in same worker, prevents encoderd from crashing
   @pytest.mark.parametrize("record_audio", [True, False])
