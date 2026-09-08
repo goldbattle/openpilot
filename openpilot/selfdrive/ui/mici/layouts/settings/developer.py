@@ -7,7 +7,7 @@ from openpilot.system.ui.lib.application import gui_app
 from openpilot.selfdrive.ui.layouts.settings.common import restart_needed_callback
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.widgets.ssh_key import SshKeyFetcher
-from openpilot.selfdrive.ui.mici.layouts.settings.recording import RecordingLayoutMici, LabelCircleToggle
+from openpilot.selfdrive.ui.mici.layouts.settings.recording import RecordingLayoutMici, RecordCircleButton
 
 
 class AlphaLongConfirmPage(NavScroller):
@@ -67,8 +67,8 @@ class DeveloperLayoutMici(NavScroller):
     # running -- so the state is visible from the developer menu without opening the page.
     self._recording = ui_state.params.get_bool("ForceOnroad")
     self._recording_panel = RecordingLayoutMici()
-    self._record_btn = LabelCircleToggle("rec", lambda: gui_app.push_widget(self._recording_panel),
-                                         lambda: self._recording)
+    self._record_btn = RecordCircleButton(lambda: gui_app.push_widget(self._recording_panel),
+                                          lambda: self._recording)
 
     txt_ssh = gui_app.texture("icons_mici/settings/developer/ssh.png", 56, 64)
     github_username = ui_state.params.get("GithubUsername") or ""
