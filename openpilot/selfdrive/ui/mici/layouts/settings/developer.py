@@ -7,7 +7,6 @@ from openpilot.system.ui.lib.application import gui_app
 from openpilot.selfdrive.ui.layouts.settings.common import restart_needed_callback
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.widgets.ssh_key import SshKeyFetcher
-from openpilot.selfdrive.ui.mici.layouts.settings.recording import RecordingLayoutMici, RecordingTileButton
 
 
 class AlphaLongConfirmPage(NavScroller):
@@ -62,12 +61,6 @@ class DeveloperLayoutMici(NavScroller):
         return
       gui_app.push_widget(dlg)
 
-    # recorder fork: opens the recording page (pick a camera, start/stop, live preview).
-    # A full-page tile rather than a circle among the toggles -- it is a page, not a switch,
-    # and the running/stopped state lives on the per-camera buttons inside it.
-    self._recording_panel = RecordingLayoutMici()
-    self._record_btn = RecordingTileButton(lambda: gui_app.push_widget(self._recording_panel))
-
     txt_ssh = gui_app.texture("icons_mici/settings/developer/ssh.png", 56, 64)
     github_username = ui_state.params.get("GithubUsername") or ""
     self._ssh_keys_btn = BigButton("SSH keys", "Not set" if not github_username else github_username, icon=txt_ssh)
@@ -94,7 +87,6 @@ class DeveloperLayoutMici(NavScroller):
                                                                                gui_app.set_show_fps(checked)))
 
     self._scroller.add_widgets([
-      self._record_btn,
       self._adb_toggle,
       self._ssh_toggle,
       self._ssh_keys_btn,

@@ -159,7 +159,11 @@ class UIState:
       self.light_sensor = -1
 
     # Update started state
-    self.started = self.sm["deviceState"].started and self.ignition
+    # recorder fork: self.ignition is panda-only (ignitionLine/ignitionCan), which are both
+    # false on a bench capture -- so without force_onroad the UI thought it was offroad for
+    # the whole recording. deviceState.started is manager's own answer and is already true
+    # here; this just stops the panda veto from overriding it.
+    self.started = self.sm["deviceState"].started and (self.ignition or self.force_onroad)
 
     # Update body state
     if self.CP is not None and self.is_body != self.CP.notCar:

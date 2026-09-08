@@ -1,3 +1,4 @@
+import pyray as rl
 from openpilot.common.params import Params
 from openpilot.system.ui.widgets.scroller import NavScroller
 from openpilot.selfdrive.ui.mici.widgets.button import BigButton
@@ -6,6 +7,7 @@ from openpilot.selfdrive.ui.mici.layouts.settings.network.network_layout import 
 from openpilot.selfdrive.ui.mici.layouts.settings.device import DeviceLayoutMici, PairBigButton
 from openpilot.selfdrive.ui.mici.layouts.settings.developer import DeveloperLayoutMici
 from openpilot.selfdrive.ui.mici.layouts.settings.software import SoftwareLayoutMici
+from openpilot.selfdrive.ui.mici.layouts.settings.recording import RecordingLayoutMici
 from openpilot.selfdrive.ui.mici.layouts.upload import SmbSettingsPage, draw_up_arrow
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 
@@ -24,6 +26,17 @@ class UploadBigButton(SettingsBigButton):
     super()._draw_content(btn_y)  # icon is None, so this just lays out the label
     draw_up_arrow(self._rect.x + self._rect.width - 30 - self.ICON_SIZE / 2,
                   btn_y + 30 + self.ICON_SIZE / 2, self.ICON_SIZE * 0.8)
+
+
+class RecordingBigButton(SettingsBigButton):
+  """recorder fork: same rectangle as every other settings entry, with a record dot drawn in
+  the icon slot -- there is no camera glyph in icons_mici/ (cf. UploadBigButton's arrow)."""
+  ICON_SIZE = 64
+
+  def _draw_content(self, btn_y: float):
+    super()._draw_content(btn_y)  # icon is None, so this just lays out the label
+    rl.draw_circle(int(self._rect.x + self._rect.width - 30 - self.ICON_SIZE / 2),
+                   int(btn_y + 30 + self.ICON_SIZE / 2), self.ICON_SIZE * 0.42, rl.Color(255, 60, 60, 235))
 
 
 class SettingsLayout(NavScroller):
@@ -51,6 +64,12 @@ class SettingsLayout(NavScroller):
     developer_btn = SettingsBigButton("developer", "", gui_app.texture("icons_mici/settings/developer_icon.png", 64, 60))
     developer_btn.set_click_callback(lambda: gui_app.push_widget(developer_panel))
 
+    # recorder fork: pick a camera and start/stop a recording, with a live preview. Lives
+    # here next to upload rather than under developer -- it is what this device is for.
+    recording_panel = RecordingLayoutMici()
+    recording_btn = RecordingBigButton("recording", "", None)
+    recording_btn.set_click_callback(lambda: gui_app.push_widget(recording_panel))
+
     # recorder fork: SMB server config + "upload all".
     upload_panel = SmbSettingsPage()
     upload_btn = UploadBigButton("upload", "", None)
@@ -65,6 +84,7 @@ class SettingsLayout(NavScroller):
     self._scroller.add_widgets([
       toggles_btn,
       network_btn,
+      recording_btn,
       upload_btn,
       device_btn,
       software_btn,

@@ -16,7 +16,7 @@ from msgq.visionipc import VisionStreamType
 
 from openpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
 from openpilot.selfdrive.ui.mici.onroad import status_line
-from openpilot.selfdrive.ui.mici.widgets.button import BigButton, BigCircleButton, BigCircleToggle
+from openpilot.selfdrive.ui.mici.widgets.button import BigCircleButton, BigCircleToggle
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos
 from openpilot.system.ui.widgets import Widget
@@ -62,26 +62,6 @@ class LabelCircleToggle(BigCircleToggle):
               self._label, font_size=44, font_weight=FontWeight.BOLD,
               alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER,
               color=rl.Color(255, 255, 255, int(255 * alpha)))
-
-
-class RecordingTileButton(BigButton):
-  """The developer-menu entry point: one rectangle filling the page, rather than a circle
-  sitting among the adb/ssh toggles. BigButton's background is a fixed-size 402x180 texture,
-  so this draws a rounded rect scaled to the widget instead and keeps everything else
-  (label layout, press bounce). No status light -- each camera in the page behind it carries
-  its own, and a second indicator here would just be another thing to keep in sync."""
-  MARGIN = 20
-
-  def __init__(self, on_click: Callable[[], None]):
-    super().__init__("recording")
-    self.set_rect(rl.Rectangle(0, 0, gui_app.width - self.MARGIN * 2, gui_app.height - self.MARGIN * 2))
-    self.set_click_callback(on_click)
-
-  def _render(self, _):
-    _, btn_x, btn_y, scale = self._handle_background()
-    scaled = rl.Rectangle(btn_x, btn_y, self._rect.width * scale, self._rect.height * scale)
-    rl.draw_rectangle_rounded(scaled, 0.12, 14, rl.Color(255, 255, 255, int(255 * 0.08)))
-    self._draw_content(btn_y)
 
 
 class RecordingPreview(Widget):
