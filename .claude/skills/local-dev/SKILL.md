@@ -164,6 +164,33 @@ Environment facts (WSLg, verified 2026-07-22):
 - `wifi_manager.py` logs `Object path ('T') must start with /` on a loop. There is no
   NetworkManager in WSL; the DBus call is caught and retried in a daemon thread. Harmless noise,
   not a crash. The network settings panel just won't populate.
+- **WSLg can be dead while WSL is fine** (seen 2026-09-07): `/mnt/wslg/.X11-unix/X0` exists but
+  nothing listens, `DISPLAY` is empty, and `/mnt/wslg/stderr.log` shows `weston ... terminated
+  with signal 11` on a loop. Binding the socket into `/tmp/.X11-unix` does not help — the server
+  is not running. Don't debug it; use Xvfb instead (`sudo apt install xvfb`), which is enough for
+  every headless check and does not need a Windows-side display at all:
+
+  ```bash
+  xvfb-run -a --server-args="-screen 0 1280x800x24" python <anything that opens a raylib window>
+  ```
+
+  Note anything importing `openpilot.system.ui.lib.application` opens a window **at import time**,
+  so a plain `python -c "import ..."` segfaults with no display. That includes `status_line.py`'s
+  own self-check.
+
+## Verifying a UI change without a device
+
+`scripts/ui_smoke.py` builds the real `MiciMainLayout`, renders every page for several frames,
+and asserts the page wiring. It catches missing attributes, wrong widget signatures and
+first-frame exceptions — the class of bug `ruff` and `py_compile` both miss.
+
+```bash
+cd ~/openpilot && source .venv/bin/activate && export PYTHONPATH=~/openpilot
+xvfb-run -a --server-args="-screen 0 1280x800x24" python .claude/skills/local-dev/scripts/ui_smoke.py
+```
+
+Everything is offroad in the smoke run, so camera pages draw their placeholder. For real video
+you still need the replay stack below or the device.
 
 ## Working on Windows without WSL
 
